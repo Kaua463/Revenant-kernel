@@ -30,26 +30,18 @@ CONFIG_ZSWAP=y
 # CONFIG_ZSWAP_DEFAULT_ON is not set
 CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZ4=y
 
-# Memory: ZRAM — v1.5 (K3/K4/K5#2): BUILT-IN pra deployar NOSSO zram c/ multi-comp.
-# Device carregava zram.ko STOCK (/system_dlkm, vermagic 6.6.89, SEM multi-comp)
-# porque a AnyKernel zip so flasha o Image (modules/ vazio). Logo o multi-comp
-# era inerte e o def-comp zstd do inc1 NAO fez nada (init.mt6899.rc forca lz4 no .ko stock).
-# (NOTA: nao usar tokens com prefixo de config em comentario aqui — o check_defconfig
-#  do kleaf varre esses tokens em qualquer linha e quebra o build.)
-# =y embute multi-comp no vmlinux; o modprobe do zram.ko stock vira no-op (class "zram-control"
-# ja registrada -> EEXIST, init nao-fatal). NAO mexe no system_dlkm verity'd (erofs RO).
-# *** VALIDAR NO FLASH-TEST: zram0 criado pelo built-in, vendor swapon ok, load do .ko
-#     stock falha gracioso sem travar boot. E o unico lever deste ciclo que exige device. ***
-CONFIG_ZRAM=y
-CONFIG_ZSMALLOC=y
-# primario lz4 (init forca lz4 = paginas quentes baixa latencia); zstd entra como
-# recomp_algorithm (tier de pagina fria) via runtime no modulo Rodin existente.
-CONFIG_ZRAM_DEF_COMP_LZ4=y
-# CONFIG_ZRAM_DEF_COMP_LZORLE is not set
-CONFIG_ZRAM_MULTI_COMP=y
+# Memory: ZRAM — v1.5 MODULAR (REVERT do built-in que bootloopou — ver SCOPE K6).
+# Tentamos zram+zsmalloc built-in (=y) pra ativar multi-comp, MAS o init first-stage
+# faz insmod do zsmalloc.ko stock que AINDA esta no ramdisk do device -> "exports
+# duplicate symbol zs_compact" -> Exec format error -> init MTK trata como FATAL ->
+# kernel panic "Attempted to kill init" @0.277s. Built-in exigiria TAMBEM remover os
+# .ko do ramdisk init_boot + modules.load, o que o flash boot-only NAO faz.
+# Mantido modular => boota (igual v1.4.1-29). Multi-comp real = passo dedicado (patch
+# de ramdisk init_boot OU deploy substituindo o .ko stock).
+CONFIG_ZRAM=m
+CONFIG_ZRAM_DEF_COMP_LZORLE=y
 CONFIG_ZRAM_WRITEBACK=y
-# idle tracking: necessario p/ "echo idle > /sys/block/zram0/idle" + recompress type=idle
-CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y
+CONFIG_ZRAM_MULTI_COMP=y
 
 # Multi-gen LRU enabled at boot
 CONFIG_LRU_GEN=y
