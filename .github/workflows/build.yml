@@ -433,11 +433,16 @@ jobs:
           cd ..
           ls -lh Revenant-Beta-*.zip
 
-      - name: Upload AnyKernel zip (flashable direto via Horizon)
+      - name: Upload AnyKernel (flashable direto — sem zip-dentro-de-zip)
         uses: actions/upload-artifact@v4
         with:
-          name: Revenant-Beta-v1.4.1-${{ github.run_number }}-flashable
-          path: Revenant-Beta-*.zip
+          # FIX double-zip: upload-artifact SEMPRE re-zipa o que recebe. Mandar o
+          # Revenant-Beta-*.zip pronto => download vira flashable.zip CONTENDO o
+          # Revenant-Beta.zip CONTENDO os arquivos (zip sobre zip). Solucao: mandar
+          # os arquivos SOLTOS do ak3/. O LCA e "ak3" -> stripped -> arquivos na raiz
+          # do artifact zip => o proprio download JA E o AnyKernel flashavel.
+          name: Revenant-v1.5-${{ github.run_number }}-flashable
+          path: ak3/*
           retention-days: 30
 
       - name: Upload Image raw (debug only)
