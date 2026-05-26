@@ -327,13 +327,18 @@ jobs:
           # lista de modulos GKI ainda exige drivers/block/zram/zram.ko (build falha com
           # "Unable to find drivers/block/zram/zram.ko"). Remover as entradas das listas
           # android/ que referenciam esses .ko. Tecnica padrao p/ embutir modulo GKI.
-          LISTS=$(grep -rlE "drivers/block/zram/zram\.ko" android/ 2>/dev/null || true)
-          [ -n "$LISTS" ] || { echo "[FAIL] zram.ko nao encontrado em android/*module*"; exit 1; }
+          # A lista mora em common/modules.bzl (COMMON_GKI_MODULES_LIST, Starlark) no
+          # android15-6.6 — NAO em android/. Buscar em .bzl + gki_aarch64_modules.
+          LISTS=$(grep -rlE "drivers/block/zram/zram\.ko" . \
+                  --include="*.bzl" --include="gki_aarch64_modules" 2>/dev/null || true)
+          [ -n "$LISTS" ] || { echo "[FAIL] zram.ko nao achado em nenhum .bzl/gki_aarch64_modules"; \
+                               grep -rl "zram.ko" . --include="*.bzl" 2>/dev/null | head; exit 1; }
+          echo "[i] listas encontradas:"; echo "$LISTS"
           for f in $LISTS; do
-            sed -E -i '\#(drivers/block/zram/zram|mm/zsmalloc)\.ko#d' "$f"
+            sed -E -i '\#"?(drivers/block/zram/zram|mm/zsmalloc)\.ko"?#d' "$f"
             echo "[+] editado: $f"
           done
-          if grep -rE "(zram|zsmalloc)\.ko" $LISTS 2>/dev/null; then
+          if grep -rE "(drivers/block/zram/zram|mm/zsmalloc)\.ko" $LISTS 2>/dev/null; then
             echo "[FAIL] zram/zsmalloc ainda na lista"; exit 1
           fi
           echo "[+] zram + zsmalloc removidos da lista de modulos GKI (built-in)"
