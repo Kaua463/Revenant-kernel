@@ -22,19 +22,32 @@ CONFIG_MQ_IOSCHED_DEADLINE=y
 CONFIG_IOSCHED_BFQ=y
 CONFIG_BFQ_GROUP_IOSCHED=y
 
-# Memory: ZSWAP LZ4
+# Memory: ZSWAP — v1.5 (K2/K5#1): compilado mas NAO default-on.
+# Device tinha zswap default-ON em cima do zram = camada dupla (comprime lz4/zbud,
+# no overflow descomprime e re-comprime no zram). Regressao vs stock MTK. Desligar
+# default-on => swap = zram puro. Boot-safe (so remove a camada redundante).
 CONFIG_ZSWAP=y
-CONFIG_ZSWAP_DEFAULT_ON=y
+# CONFIG_ZSWAP_DEFAULT_ON is not set
 CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZ4=y
 
-# Memory: ZRAM — v1.5 default comp zstd (SCOPE A6: mais "RAM virtual")
-# zstd ja disponivel (CRYPTO_ZSTD=y abaixo). Default-comp e tunavel em runtime tbm,
-# entao se o vendor init setar explicito, isso so muda o fallback. Boot-safe.
-CONFIG_ZRAM=m
+# Memory: ZRAM — v1.5 (K3/K4/K5#2): BUILT-IN pra deployar NOSSO zram c/ multi-comp.
+# Device carregava zram.ko STOCK (/system_dlkm, vermagic 6.6.89, SEM multi-comp)
+# porque a AnyKernel zip so flasha o Image (modules/ vazio). Logo CONFIG_ZRAM_MULTI_COMP
+# era inerte e o DEF_COMP zstd do inc1 NAO fez nada (init.mt6899.rc forca lz4 no .ko stock).
+# =y embute multi-comp no vmlinux; o modprobe do zram.ko stock vira no-op (class "zram-control"
+# ja registrada -> EEXIST, init nao-fatal). NAO mexe no system_dlkm verity'd (erofs RO).
+# *** VALIDAR NO FLASH-TEST: zram0 criado pelo built-in, vendor swapon ok, load do .ko
+#     stock falha gracioso sem travar boot. E o unico lever deste ciclo que exige device. ***
+CONFIG_ZRAM=y
+CONFIG_ZSMALLOC=y
+# primario lz4 (init forca lz4 = paginas quentes baixa latencia); zstd entra como
+# recomp_algorithm (tier de pagina fria) via runtime no modulo Rodin existente.
+CONFIG_ZRAM_DEF_COMP_LZ4=y
 # CONFIG_ZRAM_DEF_COMP_LZORLE is not set
-CONFIG_ZRAM_DEF_COMP_ZSTD=y
-CONFIG_ZRAM_WRITEBACK=y
 CONFIG_ZRAM_MULTI_COMP=y
+CONFIG_ZRAM_WRITEBACK=y
+# idle tracking: necessario p/ "echo idle > /sys/block/zram0/idle" + recompress type=idle
+CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y
 
 # Multi-gen LRU enabled at boot
 CONFIG_LRU_GEN=y
