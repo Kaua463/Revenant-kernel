@@ -304,6 +304,22 @@ jobs:
             sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           echo "[+] KSU integrated"
 
+      - name: Integrate Revenant /proc/rodin driver (v1.5)
+        run: |
+          cd ws/common
+          # v1.5: driver kernel-owned de controle de modos (interface-only v0,
+          # no-op no boot => nao bootloopa). Source mora no repo em rodin/.
+          mkdir -p drivers/rodin
+          cp "$GITHUB_WORKSPACE/rodin/rodin.c"   drivers/rodin/
+          cp "$GITHUB_WORKSPACE/rodin/Kconfig"   drivers/rodin/
+          cp "$GITHUB_WORKSPACE/rodin/Makefile"  drivers/rodin/
+          grep -q 'drivers/rodin/Kconfig' drivers/Kconfig || \
+            sed -i '/endmenu/i\source "drivers/rodin/Kconfig"' drivers/Kconfig
+          grep -q 'rodin/' drivers/Makefile || \
+            printf '\nobj-$(CONFIG_RODIN) += rodin/\n' >> drivers/Makefile
+          echo "[+] rodin driver integrated"
+          grep -n 'rodin' drivers/Makefile drivers/Kconfig
+
       - name: Apply config fragment (no LOCALVERSION — kleaf handles -4k)
         run: |
           cp configs/revenant-base.fragment \

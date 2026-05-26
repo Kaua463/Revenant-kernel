@@ -73,6 +73,10 @@ CONFIG_MODULE_FORCE_UNLOAD=y
 # Aditivo, generico GKI, nao toca ABI de vendor module. Boot-safe.
 CONFIG_NET_SCH_CAKE=y
 #
+# /proc/rodin — interface de controle dos modos (driver builtin, source em rodin/).
+# v0 = interface-only, NAO muta sistema no boot => nao pode bootloopar.
+CONFIG_RODIN=y
+#
 # HELD (NAO adicionados — risco de bootloop / verificacao pendente):
 #  - CONFIG_DEBUG_INFO off  -> mata BTF (DEBUG_INFO_BTF) -> bpfloader do Android
 #                              falha no init = BRICK. NAO desligar.
