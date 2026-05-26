@@ -320,6 +320,24 @@ jobs:
           echo "[+] rodin driver integrated"
           grep -n 'rodin' drivers/Makefile drivers/Kconfig
 
+      - name: Drop zram+zsmalloc from GKI module list (v1.5 — now built-in)
+        run: |
+          cd ws/common
+          # CONFIG_ZRAM=y + CONFIG_ZSMALLOC=y => os .ko deixam de ser produzidos, MAS a
+          # lista de modulos GKI ainda exige drivers/block/zram/zram.ko (build falha com
+          # "Unable to find drivers/block/zram/zram.ko"). Remover as entradas das listas
+          # android/ que referenciam esses .ko. Tecnica padrao p/ embutir modulo GKI.
+          LISTS=$(grep -rlE "drivers/block/zram/zram\.ko" android/ 2>/dev/null || true)
+          [ -n "$LISTS" ] || { echo "[FAIL] zram.ko nao encontrado em android/*module*"; exit 1; }
+          for f in $LISTS; do
+            sed -E -i '\#(drivers/block/zram/zram|mm/zsmalloc)\.ko#d' "$f"
+            echo "[+] editado: $f"
+          done
+          if grep -rE "(zram|zsmalloc)\.ko" $LISTS 2>/dev/null; then
+            echo "[FAIL] zram/zsmalloc ainda na lista"; exit 1
+          fi
+          echo "[+] zram + zsmalloc removidos da lista de modulos GKI (built-in)"
+
       - name: Apply config fragment (no LOCALVERSION — kleaf handles -4k)
         run: |
           cp configs/revenant-base.fragment \
