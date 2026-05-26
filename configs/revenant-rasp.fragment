@@ -3,9 +3,14 @@
 # SUS_MAP — esconde /proc/<pid>/maps de entries sus
 CONFIG_KSU_SUSFS_SUS_MAP=y
 
-# Custom defense patches applied at build time:
-# - __system_property_get kernel-level hook (spoofa ro.boot.* props na origem)
-# - /dev/block/by-name/vbmeta_a read intercept (retorna AVB header locked)
-# - per-app mount namespace (banks ⊥ veem mounts custom)
+# RASP defense — v1.5 DECISAO: via SuSFS RUNTIME, NAO via patch de kernel.
+# Mecanismo (ja habilitado no base fragment, zero risco de brick):
+#  - vbmeta raw read (Haven/Inter) -> CONFIG_KSU_SUSFS_OPEN_REDIRECT redireciona
+#    /dev/block/by-name/vbmeta_a -> blob fake. Configurar via modulo KSU (susfs CLI).
+#  - ro.boot.* / cmdline props      -> CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG.
+#  - per-app mount namespace        -> SuSFS SUS_MOUNT.
 #
-# These are not Kconfig options — applied as source patches in build script.
+# patches/0001-bootloader-prop-spoof.patch e 0002-vbmeta-read-intercept.patch:
+#   *** NAO APLICAR ***. 0002 faz UAF + corrompe nameidata em do_filp_open (hot path)
+#   = bootloop. 0001 substitui string mais curta sem fixup (orange->greene). Ambas
+#   sao redundantes com SuSFS acima. Mantidas no repo so como referencia historica.

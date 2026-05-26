@@ -27,9 +27,12 @@ CONFIG_ZSWAP=y
 CONFIG_ZSWAP_DEFAULT_ON=y
 CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZ4=y
 
-# Memory: ZRAM lzo-rle
+# Memory: ZRAM — v1.5 default comp zstd (SCOPE A6: mais "RAM virtual")
+# zstd ja disponivel (CRYPTO_ZSTD=y abaixo). Default-comp e tunavel em runtime tbm,
+# entao se o vendor init setar explicito, isso so muda o fallback. Boot-safe.
 CONFIG_ZRAM=m
-CONFIG_ZRAM_DEF_COMP_LZORLE=y
+# CONFIG_ZRAM_DEF_COMP_LZORLE is not set
+CONFIG_ZRAM_DEF_COMP_ZSTD=y
 CONFIG_ZRAM_WRITEBACK=y
 CONFIG_ZRAM_MULTI_COMP=y
 
@@ -62,3 +65,20 @@ CONFIG_CRYPTO_DEFLATE=y
 # Revenant is 6.6.127 — CRCs may differ. MODULE_FORCE_LOAD lets modprobe -f override.
 CONFIG_MODULE_FORCE_LOAD=y
 CONFIG_MODULE_FORCE_UNLOAD=y
+
+# ============================================================
+# v1.5 — SCOPE secao B (toggles aditivos KMI-safe)
+# ============================================================
+# CAKE: anti-bufferbloat qdisc (SCOPE: EronX NAO tem, diferencial nosso).
+# Aditivo, generico GKI, nao toca ABI de vendor module. Boot-safe.
+CONFIG_NET_SCH_CAKE=y
+#
+# HELD (NAO adicionados — risco de bootloop / verificacao pendente):
+#  - CONFIG_DEBUG_INFO off  -> mata BTF (DEBUG_INFO_BTF) -> bpfloader do Android
+#                              falha no init = BRICK. NAO desligar.
+#  - CONFIG_FTRACE off      -> remove simbolos que vendor modules importam +
+#                              mexe em superficie ABI do GKI. Hold ate validar.
+#  - CONFIG_PELT_UTIL_SHIFT  -> simbolo pode NAO existir no GKI android15-6.6
+#                              (e patch out-of-tree MTK). Verificar no tree antes;
+#                              setar inexistente = no-op silencioso, nao entrega nada.
+#  - CONFIG_SCHED_DEBUG off -> baixo valor, hold.
