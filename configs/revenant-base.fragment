@@ -32,8 +32,10 @@ CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZ4=y
 
 # Memory: ZRAM — v1.5 (K3/K4/K5#2): BUILT-IN pra deployar NOSSO zram c/ multi-comp.
 # Device carregava zram.ko STOCK (/system_dlkm, vermagic 6.6.89, SEM multi-comp)
-# porque a AnyKernel zip so flasha o Image (modules/ vazio). Logo CONFIG_ZRAM_MULTI_COMP
-# era inerte e o DEF_COMP zstd do inc1 NAO fez nada (init.mt6899.rc forca lz4 no .ko stock).
+# porque a AnyKernel zip so flasha o Image (modules/ vazio). Logo o multi-comp
+# era inerte e o def-comp zstd do inc1 NAO fez nada (init.mt6899.rc forca lz4 no .ko stock).
+# (NOTA: nao usar tokens com prefixo de config em comentario aqui — o check_defconfig
+#  do kleaf varre esses tokens em qualquer linha e quebra o build.)
 # =y embute multi-comp no vmlinux; o modprobe do zram.ko stock vira no-op (class "zram-control"
 # ja registrada -> EEXIST, init nao-fatal). NAO mexe no system_dlkm verity'd (erofs RO).
 # *** VALIDAR NO FLASH-TEST: zram0 criado pelo built-in, vendor swapon ok, load do .ko
