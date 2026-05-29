@@ -85,12 +85,20 @@ struct eemsn_ipi_data {
 	} u;
 };
 
-/* ---- vendor symbols (STRONG; resolve at insmod from vendor modules) ---- */
-extern void *get_mcupm_ipidev(void);
+/*
+ * Vendor symbols. WEAK so modpost does not error on "undefined" (they are not in
+ * the GKI Module.symvers — they belong to vendor modules resolved at insmod).
+ * CRITICAL: only ever CALL these, never take their ADDRESS. A direct call to a
+ * weak fn emits CALL26 (loader-OK via PLT); taking its address emits a GOT load
+ * (R_AARCH64_LD64_GOT_LO12_NC=312) which the arm64 module loader rejects. The
+ * CI gate (readelf | grep GOT) enforces this. Symbols are confirmed exported, so
+ * they resolve at load (CRC/version mismatch handled by load-anyway).
+ */
+extern void *get_mcupm_ipidev(void) __attribute__((weak));
 extern int mtk_ipi_send_compl(void *ipidev, int ch, int opt, void *data,
-			      int len, unsigned int timeout);
+			      int len, unsigned int timeout) __attribute__((weak));
 extern int mtk_ipi_register(void *ipidev, int ch, void *cb, void *prdata,
-			    void *msg);
+			    void *msg) __attribute__((weak));
 
 static int ipi_ackdata;
 
