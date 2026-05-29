@@ -8,6 +8,7 @@ load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
 ddk_module(
     name = "rodin_eem",
     srcs = ["rodin_eem.c"],
+    out = "rodin_eem.ko",
     hdrs = ["//common:all_headers"],
     kernel_build = "//common:kernel_aarch64",
     visibility = ["//visibility:public"],
