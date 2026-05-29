@@ -10,13 +10,17 @@
  * silicon death (that needs overvolt / firmware mod).
  *
  * Standalone notes:
- *  - Self-contained: no MTK vendor headers needed (defs inlined below).
- *  - Vendor symbols are WEAK externs (get_mcupm_ipidev/mtk_ipi_send_compl/
- *    mtk_ipi_register from mcupm+mtk_tinysys_ipi; mtk_get_eemsn_log from mtk_em).
- *    Weak => the module ALWAYS loads even if a symbol is absent; each op NULL-checks
- *    and reports. CRC mismatch on resolve is handled by the load-anyway patch.
- *  - MUST be a module (.ko) loaded POST-boot: the vendor symbols come from vendor
- *    modules that load after boot; built-in would not resolve them.
+ *  - Self-contained: no MTK vendor headers (defs inlined below).
+ *  - Vendor symbols are STRONG externs (NOT weak): a weak undefined symbol whose
+ *    address is taken forces a GOT relocation (R_AARCH64_LD64_GOT_LO12_NC=312),
+ *    which the arm64 module loader rejects ("unsupported RELA relocation: 312").
+ *    Strong externs -> direct CALL26 (handled by the loader via module PLTs).
+ *    They resolve at insmod from the vendor modules (mcupm/mtk_tinysys_ipi);
+ *    "no symbol version" / CRC mismatch is downgraded by the load-anyway patch.
+ *    Only symbols CONFIRMED exported are used: get_mcupm_ipidev [mcupm],
+ *    mtk_ipi_send_compl + mtk_ipi_register [mtk_tinysys_ipi]. mtk_get_eemsn_log
+ *    (uncertain export) is intentionally dropped — cur_volt just reports ipi_ret.
+ *  - MUST be a module (.ko) loaded POST-boot (vendor symbols load after boot).
  *
  * CPU banks only (EEMSN_DET_L/BL/B/CCI). GPU undervolt is a separate driver.
  */
@@ -27,7 +31,6 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/uaccess.h>
-#include <linux/delay.h>
 #include <linux/string.h>
 
 /* ---- constants (mt6899 6.6, confirmed in handoff) ---- */
@@ -35,8 +38,6 @@
 #define MBOX_SLOT_SIZE		4	/* bytes/slot; msg = 16B / 4 = 4 slots */
 #define IPI_SEND_POLLING	2	/* mtk_tinysys_ipi.h (WAIT=1, POLLING=2) */
 #define EEM_IPI_TIMEOUT_MS	2000
-
-#define NR_FREQ			32
 
 /* IPI command enum — order from eem-dbg-v1.h (mt6899/mt6895 identical) */
 enum {
@@ -84,73 +85,54 @@ struct eemsn_ipi_data {
 	} u;
 };
 
-struct eemsn_log_det {
-	unsigned int temp;
-	unsigned short freq_tbl[NR_FREQ];
-	unsigned char volt_tbl_pmic[NR_FREQ];
-	unsigned char volt_tbl_orig[NR_FREQ];
-	unsigned char volt_tbl_init2[NR_FREQ];
-	unsigned char num_freq_tbl;
-	unsigned char lock;
-	unsigned char features;
-	signed char volt_clamp;
-	signed char volt_offset;
-	enum eemsn_det_id det_id;
-};
-
-struct eemsn_log {
-	unsigned int eemsn_disable:8;
-	unsigned int ctrl_aging_Enable:8;
-	unsigned int sn_disable:8;
-	unsigned int segCode:8;
-	unsigned char init2_v_ready;
-	unsigned char init_vboot_done;
-	unsigned char lock;
-	unsigned char eemsn_log_en;
-	struct eemsn_log_det det_log[NR_EEMSN_DET];
-};
-
-/* ---- vendor symbols (weak; resolve at insmod from vendor modules) ---- */
-extern void *get_mcupm_ipidev(void) __attribute__((weak));
+/* ---- vendor symbols (STRONG; resolve at insmod from vendor modules) ---- */
+extern void *get_mcupm_ipidev(void);
 extern int mtk_ipi_send_compl(void *ipidev, int ch, int opt, void *data,
-			      int len, unsigned int timeout) __attribute__((weak));
+			      int len, unsigned int timeout);
 extern int mtk_ipi_register(void *ipidev, int ch, void *cb, void *prdata,
-			    void *msg) __attribute__((weak));
-extern struct eemsn_log *mtk_get_eemsn_log(void) __attribute__((weak));
+			    void *msg);
 
-static struct eemsn_log *eemsn_log;
 static int ipi_ackdata;
-static bool ipi_registered;
 
-static struct eemsn_log *eem_get_log(void)
-{
-	if (!eemsn_log && mtk_get_eemsn_log)
-		eemsn_log = mtk_get_eemsn_log();
-	return eemsn_log;
-}
-
-/* send one command to MCUPM. returns ipi ret, or negative if unavailable */
+/* send one command to MCUPM. returns ipi ret, or -ENODEV if ipidev not ready */
 static int eem_to_up(unsigned int cmd, struct eemsn_ipi_data *eem_data)
 {
-	void *ipidev;
+	void *ipidev = get_mcupm_ipidev();
 
-	if (!get_mcupm_ipidev || !mtk_ipi_send_compl) {
-		pr_warn("rodin_eem: mcupm IPI symbols unresolved (vendor modules loaded?)\n");
-		return -ENODEV;
-	}
-	ipidev = get_mcupm_ipidev();
 	if (!ipidev) {
 		pr_warn("rodin_eem: get_mcupm_ipidev() returned NULL\n");
 		return -ENODEV;
 	}
-
 	eem_data->cmd = cmd;
 	return mtk_ipi_send_compl(ipidev, CH_S_EEMSN, IPI_SEND_POLLING, eem_data,
 				 sizeof(struct eemsn_ipi_data) / MBOX_SLOT_SIZE,
 				 EEM_IPI_TIMEOUT_MS);
 }
 
-/* ---- /proc/eem/setclamp (RW): "<bank_id> <volt_clamp>" ---- */
+/* parse "<bank_id 0..3> <value>" -> bank,val. returns 0 on success */
+static int parse_bank_val(const char __user *ubuf, size_t count,
+			  int *bank, int *val)
+{
+	char buf[64], *p, *tok;
+
+	if (count == 0 || count >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, count))
+		return -EFAULT;
+	buf[count] = '\0';
+	p = buf;
+
+	tok = strsep(&p, " ");
+	if (!tok || kstrtoint(tok, 10, bank))
+		return -EINVAL;
+	if (*bank < 0 || *bank >= NR_EEMSN_DET)
+		return -EINVAL;
+	if (!p || kstrtoint(strim(p), 10, val))
+		return -EINVAL;
+	return 0;
+}
+
+/* ---- /proc/eem/eem_setclamp (RW): "<bank_id> <volt_clamp>" ---- */
 static int eem_setclamp_show(struct seq_file *m, void *v)
 {
 	seq_puts(m, "write: \"<bank_id 0..3> <volt_clamp>\" (clamp bounded at VMIN by MCUPM)\n");
@@ -160,35 +142,23 @@ static int eem_setclamp_show(struct seq_file *m, void *v)
 static ssize_t eem_setclamp_write(struct file *f, const char __user *ubuf,
 				  size_t count, loff_t *pos)
 {
-	char buf[64], *p, *tok;
 	struct eemsn_ipi_data eem_data;
-	int bank_id = 0, volt_clamp = 0, ret;
+	int bank = 0, clamp = 0, ret;
 
-	if (count == 0 || count >= sizeof(buf))
-		return -EINVAL;
-	if (copy_from_user(buf, ubuf, count))
-		return -EFAULT;
-	buf[count] = '\0';
-	p = buf;
-
-	tok = strsep(&p, " ");
-	if (!tok || kstrtoint(tok, 10, &bank_id))
-		return -EINVAL;
-	if (bank_id < 0 || bank_id >= NR_EEMSN_DET)
-		return -EINVAL;
-	if (!p || kstrtoint(strim(p), 10, &volt_clamp))
-		return -EINVAL;
+	ret = parse_bank_val(ubuf, count, &bank, &clamp);
+	if (ret)
+		return ret;
 
 	memset(&eem_data, 0, sizeof(eem_data));
-	eem_data.u.data.arg[0] = bank_id;
-	eem_data.u.data.arg[1] = volt_clamp;
+	eem_data.u.data.arg[0] = bank;
+	eem_data.u.data.arg[1] = clamp;
 	ret = eem_to_up(IPI_EEMSN_SETCLAMP_PROC_WRITE, &eem_data);
 	pr_info("rodin_eem: setclamp bank=%d clamp=%d ipi_ret=%d\n",
-		bank_id, volt_clamp, ret);
+		bank, clamp, ret);
 	return count;
 }
 
-/* ---- /proc/eem/offset (RW): "<bank_id> <offset>" ---- */
+/* ---- /proc/eem/eem_offset (RW): "<bank_id> <offset>" ---- */
 static int eem_offset_show(struct seq_file *m, void *v)
 {
 	seq_puts(m, "write: \"<bank_id 0..3> <offset>\"\n");
@@ -198,79 +168,36 @@ static int eem_offset_show(struct seq_file *m, void *v)
 static ssize_t eem_offset_write(struct file *f, const char __user *ubuf,
 				size_t count, loff_t *pos)
 {
-	char buf[64], *p, *tok;
 	struct eemsn_ipi_data eem_data;
-	int bank_id = 0, offset = 0, ret;
+	int bank = 0, offset = 0, ret;
 
-	if (count == 0 || count >= sizeof(buf))
-		return -EINVAL;
-	if (copy_from_user(buf, ubuf, count))
-		return -EFAULT;
-	buf[count] = '\0';
-	p = buf;
-
-	tok = strsep(&p, " ");
-	if (!tok || kstrtoint(tok, 10, &bank_id))
-		return -EINVAL;
-	if (bank_id < 0 || bank_id >= NR_EEMSN_DET)
-		return -EINVAL;
-	if (!p || kstrtoint(strim(p), 10, &offset))
-		return -EINVAL;
+	ret = parse_bank_val(ubuf, count, &bank, &offset);
+	if (ret)
+		return ret;
 
 	memset(&eem_data, 0, sizeof(eem_data));
-	eem_data.u.data.arg[0] = bank_id;
+	eem_data.u.data.arg[0] = bank;
 	eem_data.u.data.arg[1] = offset;
 	ret = eem_to_up(IPI_EEMSN_OFFSET_PROC_WRITE, &eem_data);
 	pr_info("rodin_eem: offset bank=%d offset=%d ipi_ret=%d\n",
-		bank_id, offset, ret);
+		bank, offset, ret);
 	return count;
 }
 
-/* ---- /proc/eem/cur_volt (RO): triggers GET_EEM_VOLT + dumps the DVFS table ---- */
+/* ---- /proc/eem/eem_cur_volt (RO): trigger GET_EEM_VOLT, report ipi_ret ---- */
 static int eem_cur_volt_show(struct seq_file *m, void *v)
 {
 	struct eemsn_ipi_data eem_data;
-	struct eemsn_log *log;
-	int ipi_ret, i, bank_id, locklimit = 0;
-	unsigned char lock;
+	int ipi_ret;
 
 	memset(&eem_data, 0, sizeof(eem_data));
 	ipi_ret = eem_to_up(IPI_EEMSN_GET_EEM_VOLT, &eem_data);
 	seq_printf(m, "ipi_ret:%d\n", ipi_ret);
-
-	log = eem_get_log();
-	if (!log) {
-		seq_puts(m, "eemsn_log unavailable (mtk_get_eemsn_log unresolved)\n");
-		return 0;
-	}
-
-	while (1) {
-		lock = log->lock;
-		locklimit++;
-		mdelay(5);
-		lock = log->lock;
-		if ((lock & 0x1) && (locklimit < 5))
-			continue;
-		break;
-	}
-
-	for (bank_id = 0; bank_id < NR_EEMSN_DET; bank_id++) {
-		seq_printf(m, "id:%d, clamp=%d offset=%d, DVFS_TABLE\n", bank_id,
-			   log->det_log[bank_id].volt_clamp,
-			   log->det_log[bank_id].volt_offset);
-		for (i = 0; i < NR_FREQ; i++) {
-			if (log->det_log[bank_id].freq_tbl[i] == 0)
-				break;
-			seq_printf(m, "[%d] freq=%hu eem=%x pmic=%x\n", i,
-				   log->det_log[bank_id].freq_tbl[i],
-				   log->det_log[bank_id].volt_tbl_init2[i],
-				   log->det_log[bank_id].volt_tbl_pmic[i]);
-		}
-	}
+	seq_puts(m, "(volt table read needs mtk_get_eemsn_log; dropped in v1 — channel check only)\n");
 	return 0;
 }
 
-/* ---- /proc/eem/debug (RW): "<bank_id> <disable>" — enable/disable per-bank ---- */
+/* ---- /proc/eem/eem_debug (RW): "<bank_id> <disable>" — per-bank enable ---- */
 static int eem_debug_show(struct seq_file *m, void *v)
 {
 	return 0;
@@ -279,41 +206,24 @@ static int eem_debug_show(struct seq_file *m, void *v)
 static ssize_t eem_debug_write(struct file *f, const char __user *ubuf,
 			       size_t count, loff_t *pos)
 {
-	char buf[64], *p, *tok;
 	struct eemsn_ipi_data eem_data;
-	int bank_id = 0, disable = 0;
+	int bank = 0, disable = 0, ret;
 
-	if (count == 0 || count >= sizeof(buf))
-		return -EINVAL;
-	if (copy_from_user(buf, ubuf, count))
-		return -EFAULT;
-	buf[count] = '\0';
-	p = buf;
-
-	tok = strsep(&p, " ");
-	if (!tok || kstrtoint(tok, 10, &bank_id))
-		return -EINVAL;
-	if (bank_id < 0 || bank_id >= NR_EEMSN_DET)
-		return -EINVAL;
-	if (!p || kstrtoint(strim(p), 10, &disable))
-		return -EINVAL;
+	ret = parse_bank_val(ubuf, count, &bank, &disable);
+	if (ret)
+		return ret;
 
 	memset(&eem_data, 0, sizeof(eem_data));
-	eem_data.u.data.arg[0] = bank_id;
+	eem_data.u.data.arg[0] = bank;
 	eem_data.u.data.arg[1] = disable;
 	eem_to_up(IPI_EEMSN_DEBUG_PROC_WRITE, &eem_data);
 	return count;
 }
 
-/* ---- /proc/eem/disable (RW): global EEMSN enable/disable ---- */
+/* ---- /proc/eem/eem_disable (RW): global EEMSN enable/disable ---- */
 static int eem_disable_show(struct seq_file *m, void *v)
 {
-	struct eemsn_log *log = eem_get_log();
-
-	if (log)
-		seq_printf(m, "eemsn_disable:%d\n", log->eemsn_disable);
-	else
-		seq_puts(m, "eemsn_log unavailable\n");
+	seq_puts(m, "write an int to enable/disable EEMSN (EN_PROC_WRITE)\n");
 	return 0;
 }
 
@@ -368,22 +278,16 @@ static int __init rodin_eem_init(void)
 	void *ipidev;
 	int err;
 
-	eemsn_log = eem_get_log();	/* best-effort */
-
 	/* register the AP side of CH_S_EEMSN (eem-dbg normally does this) */
-	if (get_mcupm_ipidev && mtk_ipi_register) {
-		ipidev = get_mcupm_ipidev();
-		if (ipidev) {
-			err = mtk_ipi_register(ipidev, CH_S_EEMSN, NULL, NULL,
-					       &ipi_ackdata);
-			if (err)
-				pr_info("rodin_eem: ipi_register ret=%d (maybe already registered)\n",
-					err);
-			else
-				ipi_registered = true;
-		}
+	ipidev = get_mcupm_ipidev();
+	if (ipidev) {
+		err = mtk_ipi_register(ipidev, CH_S_EEMSN, NULL, NULL,
+				       &ipi_ackdata);
+		if (err)
+			pr_info("rodin_eem: ipi_register ret=%d (maybe already registered)\n",
+				err);
 	} else {
-		pr_warn("rodin_eem: mcupm/ipi symbols unresolved at init\n");
+		pr_warn("rodin_eem: get_mcupm_ipidev() NULL at init (mcupm not ready?)\n");
 	}
 
 	eem_dir = proc_mkdir("eem", NULL);
@@ -397,8 +301,7 @@ static int __init rodin_eem_init(void)
 	proc_create("eem_debug",    0664, eem_dir, &eem_debug_ops);
 	proc_create("eem_disable",  0664, eem_dir, &eem_disable_ops);
 
-	pr_info("rodin_eem: /proc/eem ready (ipi_reg=%d, log=%p, sym=%d)\n",
-		ipi_registered, eemsn_log, (get_mcupm_ipidev && mtk_ipi_send_compl) ? 1 : 0);
+	pr_info("rodin_eem: /proc/eem ready (ipidev=%p)\n", ipidev);
 	return 0;
 }
 

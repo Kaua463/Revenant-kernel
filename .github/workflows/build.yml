@@ -365,7 +365,16 @@ jobs:
           cp -v "$KO" "$GITHUB_WORKSPACE/dist/rodin_eem.ko"
           echo "=== rodin_eem.ko info ==="
           strings "$KO" | grep -iE "vermagic|^name=|^depends=|/proc/eem ready" | head
-          echo "=== undefined (weak) vendor syms expected: get_mcupm_ipidev/mtk_ipi_* ==="
+          echo "=== GOT reloc gate (arm64 module loader rejects R_AARCH64_*_GOT_*) ==="
+          # GOT relocs (reloc 311/312) => insmod fails "unsupported RELA relocation".
+          # Caused by weak undefined syms whose address is taken. Must be ZERO.
+          if readelf -r "$KO" 2>/dev/null | grep -iE "GOT"; then
+            echo "[FAIL] rodin_eem.ko has GOT relocations — would be rejected by module loader"
+            exit 1
+          fi
+          echo "[+] no GOT relocs — loader-compatible"
+          echo "=== undefined vendor syms (expect U/global, not weak): get_mcupm_ipidev/mtk_ipi_* ==="
+          readelf -sW "$KO" 2>/dev/null | grep -iE "get_mcupm_ipidev|mtk_ipi_send_compl|mtk_ipi_register" | head
 
       - name: Clone AnyKernel3 (osm0sis upstream)
         run: |
