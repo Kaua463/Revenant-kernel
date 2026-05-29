@@ -349,6 +349,24 @@ jobs:
           echo "=== KSU + SuSFS strings ==="
           strings "$GITHUB_WORKSPACE/dist/Image" | grep -E "KSU_VERSION|SUSFS_VERSION|susfs is initialized" | head -3
 
+      - name: Build EEMSN undervolt module (rodin_eem.ko)
+        run: |
+          cd ws
+          # ddk_module standalone built contra //common:kernel_aarch64 (mesmos flags
+          # do kernel => vermagic android15-8-4k bate). Subpackage common/rodin_eem.
+          mkdir -p common/rodin_eem
+          cp "$GITHUB_WORKSPACE/rodin_eem/rodin_eem.c" common/rodin_eem/
+          cp "$GITHUB_WORKSPACE/rodin_eem/BUILD.bazel" common/rodin_eem/
+          tools/bazel build --lto=thin --page_size=4k \
+            --defconfig_fragment=//common:arch/arm64/configs/revenant.fragment \
+            //common/rodin_eem:rodin_eem
+          KO=$(find -L bazel-bin -name rodin_eem.ko | head -1)
+          test -n "$KO"
+          cp -v "$KO" "$GITHUB_WORKSPACE/dist/rodin_eem.ko"
+          echo "=== rodin_eem.ko info ==="
+          strings "$KO" | grep -iE "vermagic|^name=|^depends=|/proc/eem ready" | head
+          echo "=== undefined (weak) vendor syms expected: get_mcupm_ipidev/mtk_ipi_* ==="
+
       - name: Clone AnyKernel3 (osm0sis upstream)
         run: |
           cd "$GITHUB_WORKSPACE"
@@ -451,6 +469,13 @@ jobs:
           name: Revenant-Image-v1.4.1-${{ github.run_number }}-debug
           path: dist/Image
           retention-days: 7
+
+      - name: Upload EEMSN undervolt module (rodin_eem.ko)
+        uses: actions/upload-artifact@v4
+        with:
+          name: rodin_eem-ko-${{ github.run_number }}
+          path: dist/rodin_eem.ko
+          retention-days: 30
 
       - name: Create release
         if: ${{ inputs.release == true }}
