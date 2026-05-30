@@ -28,10 +28,16 @@
  * mtk_get_eemsn_log(). LAYOUT NOTE: the struct below is the open-source mt6895
  * (eem-dbg-v1.h) layout — the oppo mt6899 vendor tree was not available to diff
  * against. To stay robust to any layout drift the readback is self-validating
- * (prints num_freq_tbl per bank, stops at freq==0) and reports the undervolt as a
- * PMIC-CODE DELTA (orig-pmic), which is EXACT regardless of the abs mV base/step.
- * Absolute mV is an annotated ESTIMATE (6.25mV/step, 0.4V base). read-only: at
- * worst it prints wrong absolute numbers, never faults the device.
+ * (stops at freq==0) and reports the undervolt as a PMIC-CODE DELTA (orig-pmic),
+ * which is EXACT regardless of the abs mV base/step. Absolute mV is an annotated
+ * ESTIMATE (6.25mV/step, 0.4V base).
+ *
+ * v3: v2 FAULTED on device — iterating det_log[1..3] with the mt6895 stride walked
+ * past the real mt6899 allocation (the getter returns a struct sized to the real,
+ * differing layout). v3 reads ONLY det_log[0] (eff), which sits at the fixed start
+ * of the array (valid for any NR_FREQ), bounds the inner loop by NR_FREQ + freq==0
+ * + an orig-code range check (break if outside [0x10..0xFF] ~= 0.5..2V), and leaves
+ * banks 1..3 disabled until the mt6899 stride is confirmed from this det0 dump.
  */
 
 #include <linux/kernel.h>
@@ -271,8 +277,9 @@ static int eem_cur_volt_show(struct seq_file *m, void *v)
 {
 	struct eemsn_ipi_data eem_data;
 	struct eemsn_log *log;
+	struct eemsn_log_det *d0;
 	unsigned char lock;
-	int ipi_ret, bank, i, lim = 0;
+	int ipi_ret, i, lim = 0;
 
 	/* refresh volt_tbl_pmic from MCUPM, then read the shared log */
 	memset(&eem_data, 0, sizeof(eem_data));
@@ -295,33 +302,46 @@ static int eem_cur_volt_show(struct seq_file *m, void *v)
 	seq_printf(m, "ipi_ret:%d  (abs mV = est @6.25mV/step,0.4V base; DELTA is exact)\n",
 		   ipi_ret);
 
-	for (bank = 0; bank < NR_EEMSN_DET; bank++) {
-		struct eemsn_log_det *d = &log->det_log[bank];
-		unsigned int n = d->num_freq_tbl;
+	/*
+	 * v3 SAFETY: read ONLY det_log[0] (eff). det0 is at the fixed start of the
+	 * array, so it is valid even if the mt6899 NR_FREQ/stride differs from the
+	 * mt6895 layout. Banks 1..3 are NOT touched (v2 faulted reading them past the
+	 * real allocation). The inner loop is bounded by NR_FREQ, stops at freq==0,
+	 * and breaks the moment an orig code falls outside [0x10..0xFF] — so a layout
+	 * mismatch stops at the first bogus byte instead of reading deeper garbage.
+	 */
+	d0 = &log->det_log[0];
+	seq_printf(m, "det0(%s) num_freq=%u(raw) clamp=%d offset=%d  [banks 1-3 OFF: mt6899 stride TBD]\n",
+		   eem_det_name[0], d0->num_freq_tbl, d0->volt_clamp, d0->volt_offset);
 
-		seq_printf(m, "det%d(%s) num_freq=%u clamp=%d offset=%d\n",
-			   bank, eem_det_name[bank], n,
-			   d->volt_clamp, d->volt_offset);
-		if (n > NR_FREQ)		/* sanity bound vs layout drift */
-			n = NR_FREQ;
-		for (i = 0; i < (int)n; i++) {
-			unsigned char orig = d->volt_tbl_orig[i];
-			unsigned char pmic = d->volt_tbl_pmic[i];
-			int delta_uv;
+	for (i = 0; i < NR_FREQ; i++) {
+		unsigned char orig = d0->volt_tbl_orig[i];
+		unsigned char pmic = d0->volt_tbl_pmic[i];
+		int delta_uv;
 
-			if (d->freq_tbl[i] == 0)
-				break;
-			delta_uv = ((int)orig - (int)pmic) * EEM_PMIC_STEP_UV;
-
-			seq_printf(m, "  opp%-2d freq=%-5hu orig=0x%02x(",
-				   i, d->freq_tbl[i], orig);
-			eem_seq_mv(m, eem_code_to_uv(orig));
-			seq_printf(m, "mV) pmic=0x%02x(", pmic);
-			eem_seq_mv(m, eem_code_to_uv(pmic));
-			seq_puts(m, "mV) delta=");
-			eem_seq_mv(m, delta_uv);
-			seq_puts(m, "mV\n");
+		if (d0->freq_tbl[i] == 0)
+			break;
+		/*
+		 * freq_tbl is the FIRST array (offset 4) so freq is reliable even if the
+		 * mt6899 NR_FREQ differs; the volt arrays start at an NR_FREQ-dependent
+		 * offset, so a bogus orig here means our NR_FREQ guess is wrong. Print the
+		 * (reliable) freq in the stop line — the valid-freq count = real NR_FREQ.
+		 */
+		if (orig < 0x10) {	/* ~<0.5V code => volt misaligned / layout drift */
+			seq_printf(m, "  opp%-2d freq=%-5hu orig=0x%02x outside [0x10..0xFF] — stop (NR_FREQ likely != 32)\n",
+				   i, d0->freq_tbl[i], orig);
+			break;
 		}
+		delta_uv = ((int)orig - (int)pmic) * EEM_PMIC_STEP_UV;
+
+		seq_printf(m, "  opp%-2d freq=%-5hu orig=0x%02x(",
+			   i, d0->freq_tbl[i], orig);
+		eem_seq_mv(m, eem_code_to_uv(orig));
+		seq_printf(m, "mV) pmic=0x%02x(", pmic);
+		eem_seq_mv(m, eem_code_to_uv(pmic));
+		seq_puts(m, "mV) delta=");
+		eem_seq_mv(m, delta_uv);
+		seq_puts(m, "mV\n");
 	}
 	return 0;
 }
