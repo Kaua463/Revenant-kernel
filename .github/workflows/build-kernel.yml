@@ -1,5 +1,10 @@
-name: Build Revenant Kernel
+name: Build Revenant Kernel (kernel + bazel cache)
 
+# Workflow A do split: builda o kernel pesado e SALVA o cache do Bazel + a árvore
+# ws/ pra a workflow B (build-module.yml) iterar o rodin_eem.ko em ~1min sem
+# rebuildar o kernel. Roda manualmente OU quando muda algo que afeta o kernel
+# (config fragment, driver in-tree /proc/rodin, patches, ou este próprio arquivo).
+# NÃO dispara em rodin_eem/** (isso é a workflow B).
 on:
   workflow_dispatch:
     inputs:
@@ -8,6 +13,12 @@ on:
         required: false
         default: false
         type: boolean
+  push:
+    paths:
+      - 'configs/**'
+      - 'rodin/**'
+      - 'patches/**'
+      - '.github/workflows/build-kernel.yml'
 
 env:
   KMI_BRANCH: common-android15-6.6
@@ -39,6 +50,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compute kernel cache key
+        run: |
+          # Chave do cache do kernel. DEVE ser idêntica à da workflow B (build-module.yml).
+          # Hash sobre TUDO que muda o binário do kernel (NÃO inclui rodin_eem/ — é o que
+          # B itera). Os commits pinados (KSU/SuSFS) e o KMI_TAG vivem neste arquivo, então
+          # hashear build-kernel.yml já os cobre.
+          H=$(cat .github/workflows/build-kernel.yml \
+                  configs/*.fragment \
+                  rodin/* \
+                  patches/* 2>/dev/null | sha256sum | cut -c1-16)
+          KEY="kernel-${KMI_TAG}-${H}"
+          echo "CACHE_KEY=$KEY" >> "$GITHUB_ENV"
+          echo "[+] cache key = $KEY"
 
       - name: Free disk space
         run: |
@@ -349,32 +374,27 @@ jobs:
           echo "=== KSU + SuSFS strings ==="
           strings "$GITHUB_WORKSPACE/dist/Image" | grep -E "KSU_VERSION|SUSFS_VERSION|susfs is initialized" | head -3
 
-      - name: Build EEMSN undervolt module (rodin_eem.ko)
+      # ===== módulo rodin_eem.ko NÃO é buildado aqui (vai pra workflow B) =====
+      # A só prepara o kernel + cache. B (build-module.yml) restaura este cache e
+      # builda o .ko em ~1min. Isso permite iterar v3/v4 do undervolt rápido.
+
+      - name: Report cache footprint (pre-save)
         run: |
-          cd ws
-          # ddk_module standalone built contra //common:kernel_aarch64 (mesmos flags
-          # do kernel => vermagic android15-8-4k bate). Subpackage common/rodin_eem.
-          mkdir -p common/rodin_eem
-          cp "$GITHUB_WORKSPACE/rodin_eem/rodin_eem.c" common/rodin_eem/
-          cp "$GITHUB_WORKSPACE/rodin_eem/BUILD.bazel" common/rodin_eem/
-          tools/bazel build --lto=thin --page_size=4k \
-            --defconfig_fragment=//common:arch/arm64/configs/revenant.fragment \
-            //common/rodin_eem:rodin_eem
-          KO=$(find -L bazel-bin -name rodin_eem.ko | head -1)
-          test -n "$KO"
-          cp -v "$KO" "$GITHUB_WORKSPACE/dist/rodin_eem.ko"
-          echo "=== rodin_eem.ko info ==="
-          strings "$KO" | grep -iE "vermagic|^name=|^depends=|/proc/eem ready" | head
-          echo "=== GOT reloc gate (arm64 module loader rejects R_AARCH64_*_GOT_*) ==="
-          # GOT relocs (reloc 311/312) => insmod fails "unsupported RELA relocation".
-          # Caused by weak undefined syms whose address is taken. Must be ZERO.
-          if readelf -r "$KO" 2>/dev/null | grep -iE "GOT"; then
-            echo "[FAIL] rodin_eem.ko has GOT relocations — would be rejected by module loader"
-            exit 1
-          fi
-          echo "[+] no GOT relocs — loader-compatible"
-          echo "=== undefined vendor syms (expect U/global, not weak): get_mcupm_ipidev/mtk_ipi_* ==="
-          readelf -sW "$KO" 2>/dev/null | grep -iE "get_mcupm_ipidev|mtk_ipi_send_compl|mtk_ipi_register" | head
+          echo "=== ~/.cache/bazel ==="; du -sh ~/.cache/bazel 2>/dev/null || echo "(none)"
+          echo "=== ws/ ===";           du -sh ws 2>/dev/null || echo "(none)"
+          echo "=== ws/bazel-bin/common (symlinked) ==="; du -shL ws/bazel-bin/common 2>/dev/null || true
+          df -h /
+
+      - name: Save bazel cache + ws tree (key ${{ env.CACHE_KEY }})
+        uses: actions/cache/save@v4
+        with:
+          # Limite do actions/cache é 10GB/entry. Se estourar, o save emite warning e
+          # a entry não fica disponível -> B faz fallback (build completo, lento mas ok).
+          # O Report acima mostra o tamanho real pra decidirmos.
+          path: |
+            ~/.cache/bazel
+            ws
+          key: ${{ env.CACHE_KEY }}
 
       - name: Clone AnyKernel3 (osm0sis upstream)
         run: |
@@ -478,13 +498,6 @@ jobs:
           name: Revenant-Image-v1.4.1-${{ github.run_number }}-debug
           path: dist/Image
           retention-days: 7
-
-      - name: Upload EEMSN undervolt module (rodin_eem.ko)
-        uses: actions/upload-artifact@v4
-        with:
-          name: rodin_eem-ko-${{ github.run_number }}
-          path: dist/rodin_eem.ko
-          retention-days: 30
 
       - name: Create release
         if: ${{ inputs.release == true }}
