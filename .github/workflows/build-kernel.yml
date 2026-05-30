@@ -1,5 +1,10 @@
-name: Build Revenant Kernel
+name: Build Revenant Kernel (kernel + bazel cache)
 
+# Workflow A do split: builda o kernel pesado e SALVA o cache do Bazel + a árvore
+# ws/ pra a workflow B (build-module.yml) iterar o rodin_eem.ko em ~1min sem
+# rebuildar o kernel. Roda manualmente OU quando muda algo que afeta o kernel
+# (config fragment, driver in-tree /proc/rodin, patches, ou este próprio arquivo).
+# NÃO dispara em rodin_eem/** (isso é a workflow B).
 on:
   workflow_dispatch:
     inputs:
@@ -8,6 +13,12 @@ on:
         required: false
         default: false
         type: boolean
+  push:
+    paths:
+      - 'configs/**'
+      - 'rodin/**'
+      - 'patches/**'
+      - '.github/workflows/build-kernel.yml'
 
 env:
   KMI_BRANCH: common-android15-6.6
@@ -39,6 +50,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compute kernel cache key
+        run: |
+          # Chave do cache do kernel. DEVE ser idêntica à da workflow B (build-module.yml).
+          # Hash sobre TUDO que muda o binário do kernel (NÃO inclui rodin_eem/ — é o que
+          # B itera). Os commits pinados (KSU/SuSFS) e o KMI_TAG vivem neste arquivo, então
+          # hashear build-kernel.yml já os cobre.
+          H=$(cat .github/workflows/build-kernel.yml \
+                  configs/*.fragment \
+                  rodin/* \
+                  patches/* 2>/dev/null | sha256sum | cut -c1-16)
+          KEY="kernel-${KMI_TAG}-${H}"
+          echo "CACHE_KEY=$KEY" >> "$GITHUB_ENV"
+          echo "[+] cache key = $KEY"
 
       - name: Free disk space
         run: |
@@ -304,6 +329,22 @@ jobs:
             sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           echo "[+] KSU integrated"
 
+      - name: Integrate Revenant /proc/rodin driver (v1.5)
+        run: |
+          cd ws/common
+          # v1.5: driver kernel-owned de controle de modos (interface-only v0,
+          # no-op no boot => nao bootloopa). Source mora no repo em rodin/.
+          mkdir -p drivers/rodin
+          cp "$GITHUB_WORKSPACE/rodin/rodin.c"   drivers/rodin/
+          cp "$GITHUB_WORKSPACE/rodin/Kconfig"   drivers/rodin/
+          cp "$GITHUB_WORKSPACE/rodin/Makefile"  drivers/rodin/
+          grep -q 'drivers/rodin/Kconfig' drivers/Kconfig || \
+            sed -i '/endmenu/i\source "drivers/rodin/Kconfig"' drivers/Kconfig
+          grep -q 'rodin/' drivers/Makefile || \
+            printf '\nobj-$(CONFIG_RODIN) += rodin/\n' >> drivers/Makefile
+          echo "[+] rodin driver integrated"
+          grep -n 'rodin' drivers/Makefile drivers/Kconfig
+
       - name: Apply config fragment (no LOCALVERSION — kleaf handles -4k)
         run: |
           cp configs/revenant-base.fragment \
@@ -332,6 +373,28 @@ jobs:
           strings "$GITHUB_WORKSPACE/dist/Image" | grep "^Linux version" | head -1
           echo "=== KSU + SuSFS strings ==="
           strings "$GITHUB_WORKSPACE/dist/Image" | grep -E "KSU_VERSION|SUSFS_VERSION|susfs is initialized" | head -3
+
+      # ===== módulo rodin_eem.ko NÃO é buildado aqui (vai pra workflow B) =====
+      # A só prepara o kernel + cache. B (build-module.yml) restaura este cache e
+      # builda o .ko em ~1min. Isso permite iterar v3/v4 do undervolt rápido.
+
+      - name: Report cache footprint (pre-save)
+        run: |
+          echo "=== ~/.cache/bazel ==="; du -sh ~/.cache/bazel 2>/dev/null || echo "(none)"
+          echo "=== ws/ ===";           du -sh ws 2>/dev/null || echo "(none)"
+          echo "=== ws/bazel-bin/common (symlinked) ==="; du -shL ws/bazel-bin/common 2>/dev/null || true
+          df -h /
+
+      - name: Save bazel cache + ws tree (key ${{ env.CACHE_KEY }})
+        uses: actions/cache/save@v4
+        with:
+          # Limite do actions/cache é 10GB/entry. Se estourar, o save emite warning e
+          # a entry não fica disponível -> B faz fallback (build completo, lento mas ok).
+          # O Report acima mostra o tamanho real pra decidirmos.
+          path: |
+            ~/.cache/bazel
+            ws
+          key: ${{ env.CACHE_KEY }}
 
       - name: Clone AnyKernel3 (osm0sis upstream)
         run: |
@@ -417,11 +480,16 @@ jobs:
           cd ..
           ls -lh Revenant-Beta-*.zip
 
-      - name: Upload AnyKernel zip (flashable direto via Horizon)
+      - name: Upload AnyKernel (flashable direto — sem zip-dentro-de-zip)
         uses: actions/upload-artifact@v4
         with:
-          name: Revenant-Beta-v1.4.1-${{ github.run_number }}-flashable
-          path: Revenant-Beta-*.zip
+          # FIX double-zip: upload-artifact SEMPRE re-zipa o que recebe. Mandar o
+          # Revenant-Beta-*.zip pronto => download vira flashable.zip CONTENDO o
+          # Revenant-Beta.zip CONTENDO os arquivos (zip sobre zip). Solucao: mandar
+          # os arquivos SOLTOS do ak3/. O LCA e "ak3" -> stripped -> arquivos na raiz
+          # do artifact zip => o proprio download JA E o AnyKernel flashavel.
+          name: Revenant-v1.5-${{ github.run_number }}-flashable
+          path: ak3/*
           retention-days: 30
 
       - name: Upload Image raw (debug only)

@@ -1,0 +1,15 @@
+load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
+
+# EEMSN CPU undervolt module, built against the Revenant GKI kernel (KMI-matched
+# vermagic android15-8-4k). hdrs=//common:all_headers gives the module the kernel
+# header set (without it: "compiler-version.h file not found"). Vendor symbols
+# (mcupm/tinysys_ipi/mtk_em) are weak externs resolved at insmod; CRC mismatch
+# handled by the load-anyway patch.
+ddk_module(
+    name = "rodin_eem",
+    srcs = ["rodin_eem.c"],
+    out = "rodin_eem.ko",
+    hdrs = ["//common:all_headers"],
+    kernel_build = "//common:kernel_aarch64",
+    visibility = ["//visibility:public"],
+)

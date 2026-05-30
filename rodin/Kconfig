@@ -1,0 +1,13 @@
+config RODIN
+	bool "Revenant /proc/rodin game-mode control interface"
+	default y
+	help
+	  Kernel-owned control surface at /proc/rodin for the Revenant
+	  game-mode stack (modes, thermal profile, whitelist, stats).
+
+	  The companion app (RodinTools) writes here and the kernel applies
+	  the levers internally, sidestepping the SELinux denials that block
+	  the app from poking vendor sysfs directly (SCOPE I6/J5).
+
+	  v0 is interface-only and performs no system mutation at boot, so it
+	  cannot cause a bootloop. Say Y.
