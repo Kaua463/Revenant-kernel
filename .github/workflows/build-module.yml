@@ -32,11 +32,9 @@ jobs:
           echo "CACHE_KEY=$KEY" >> "$GITHUB_ENV"
           echo "[+] cache key = $KEY"
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force || true
-          df -h /
+      # Sem "Free disk space": B não builda o kernel, só restaura ~27GB e compila o
+      # módulo. O runner tem ~67G livres sem isso — economiza ~49s. Se um dia o
+      # restore estourar disco, reintroduzir o free-disk.
 
       - name: Restore bazel cache + ws tree
         id: restore

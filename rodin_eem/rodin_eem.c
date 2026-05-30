@@ -445,4 +445,3 @@ module_exit(rodin_eem_exit);
 MODULE_DESCRIPTION("Revenant EEMSN CPU undervolt (rodin/MT6899) — eem-dbg port");
 MODULE_AUTHOR("Kaua / Revenant");
 MODULE_LICENSE("GPL v2");
-/* ci: build-module fast-path smoke test */
