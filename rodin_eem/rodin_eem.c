@@ -11,33 +11,41 @@
  *
  * Standalone notes:
  *  - Self-contained: no MTK vendor headers (defs inlined below).
- *  - Vendor symbols are STRONG externs (NOT weak): a weak undefined symbol whose
- *    address is taken forces a GOT relocation (R_AARCH64_LD64_GOT_LO12_NC=312),
- *    which the arm64 module loader rejects ("unsupported RELA relocation: 312").
- *    Strong externs -> direct CALL26 (handled by the loader via module PLTs).
- *    They resolve at insmod from the vendor modules (mcupm/mtk_tinysys_ipi/mtk_em);
+ *  - Vendor symbols are weak externs but only ever CALLED, never address-taken:
+ *    address-of a weak undef forces a GOT relocation (R_AARCH64_LD64_GOT_LO12_NC
+ *    =312) which the arm64 module loader rejects; a direct call emits CALL26
+ *    (handled via module PLTs). They resolve at insmod from the vendor modules;
  *    "no symbol version" / CRC mismatch is downgraded by the load-anyway patch.
- *    Symbols CONFIRMED exported (device kallsyms): get_mcupm_ipidev [mcupm],
- *    mtk_ipi_send_compl + mtk_ipi_register [mtk_tinysys_ipi], and (v2) the voltage
- *    table getter mtk_get_eemsn_log [mtk_em].
+ *    EXPORTED, so they resolve (device kallsyms 'T'+__ksymtab): get_mcupm_ipidev
+ *    [mcupm], mtk_ipi_send_compl + mtk_ipi_register [mtk_tinysys_ipi].
+ *    mtk_get_eemsn_log is NOT exported (kallsyms 't') — resolved via kallsyms at
+ *    init instead (see v4 below); a weak extern to it would never resolve and its
+ *    call site would trap.
  *  - MUST be a module (.ko) loaded POST-boot (vendor symbols load after boot).
  *
  * CPU banks only (EEMSN_DET_L/BL/B/CCI). GPU undervolt is a separate driver.
  *
- * v2: eem_cur_volt now reads back the real per-bank/OPP voltage table via
- * mtk_get_eemsn_log(). LAYOUT NOTE: the struct below is the open-source mt6895
- * (eem-dbg-v1.h) layout — the oppo mt6899 vendor tree was not available to diff
- * against. To stay robust to any layout drift the readback is self-validating
- * (stops at freq==0) and reports the undervolt as a PMIC-CODE DELTA (orig-pmic),
- * which is EXACT regardless of the abs mV base/step. Absolute mV is an annotated
- * ESTIMATE (6.25mV/step, 0.4V base).
+ * v2: eem_cur_volt reads back the real per-bank/OPP voltage table. LAYOUT NOTE:
+ * the struct below is the open-source mt6895 (eem-dbg-v1.h) layout — the oppo
+ * mt6899 vendor tree was not available to diff against. Undervolt is reported as a
+ * PMIC-CODE DELTA (orig-pmic), EXACT regardless of the abs mV base/step; absolute
+ * mV is an annotated ESTIMATE (6.25mV/step, 0.4V base).
  *
- * v3: v2 FAULTED on device — iterating det_log[1..3] with the mt6895 stride walked
- * past the real mt6899 allocation (the getter returns a struct sized to the real,
- * differing layout). v3 reads ONLY det_log[0] (eff), which sits at the fixed start
- * of the array (valid for any NR_FREQ), bounds the inner loop by NR_FREQ + freq==0
- * + an orig-code range check (break if outside [0x10..0xFF] ~= 0.5..2V), and leaves
- * banks 1..3 disabled until the mt6899 stride is confirmed from this det0 dump.
+ * v2 rebooted the device. Root cause (v4 diagnosis): mtk_get_eemsn_log is NOT
+ * exported (kallsyms 't', no __ksymtab) — the weak extern never resolved, so its
+ * call site was an unresolved BL that the module loader patches to a BRK trap ->
+ * panic the moment eem_cur_volt ran. (The other vendor syms get_mcupm_ipidev /
+ * mtk_ipi_* ARE exported 'T'+__ksymtab, which is why v1 setclamp/channel works.)
+ *
+ * v4: resolve mtk_get_eemsn_log at init via a kallsyms_lookup_name pointer
+ * obtained with the standard kprobe trick (KernelSU/livepatch technique; KSU is
+ * already live on this kernel), then CALL it through that function pointer — an
+ * indirect call to a valid runtime address: no relocation, no trap. If it cannot
+ * be resolved, eem_cur_volt degrades to a message (never calls -> never traps).
+ *
+ * v3 layout safety kept: read ONLY det_log[0] (eff), at the fixed start of the
+ * array (valid for any NR_FREQ); inner loop bounded by NR_FREQ + freq==0 + an
+ * orig-code range check. Banks 1..3 stay off until the mt6899 stride is confirmed.
  */
 
 #include <linux/kernel.h>
@@ -49,6 +57,8 @@
 #include <linux/string.h>
 #include <linux/delay.h>
 #include <linux/types.h>
+#include <linux/kprobes.h>
+#include <linux/kallsyms.h>
 
 /* ---- constants (mt6899 6.6, confirmed in handoff) ---- */
 #define CH_S_EEMSN		7	/* mcupm_ipi_id_6.6.h */
@@ -152,7 +162,30 @@ extern int mtk_ipi_send_compl(void *ipidev, int ch, int opt, void *data,
 			      int len, unsigned int timeout) __attribute__((weak));
 extern int mtk_ipi_register(void *ipidev, int ch, void *cb, void *prdata,
 			    void *msg) __attribute__((weak));
-extern struct eemsn_log *mtk_get_eemsn_log(void) __attribute__((weak));
+
+/*
+ * mtk_get_eemsn_log is NOT exported (kallsyms 't', no __ksymtab) — a weak extern
+ * to it never resolves and the call site traps (BRK). Resolve it dynamically at
+ * init via a kallsyms_lookup_name pointer obtained with the kprobe trick
+ * (kallsyms_lookup_name is itself unexported on 5.7+), then call through the
+ * pointer (indirect, valid runtime address, no relocation/trap).
+ */
+typedef unsigned long (*kallsyms_lookup_name_t)(const char *name);
+typedef struct eemsn_log *(*get_eemsn_log_fn)(void);
+
+static get_eemsn_log_fn eem_get_log;	/* resolved at init; NULL if unavailable */
+
+static kallsyms_lookup_name_t rodin_resolve_kln(void)
+{
+	struct kprobe kp = { .symbol_name = "kallsyms_lookup_name" };
+	kallsyms_lookup_name_t fn = NULL;
+
+	if (register_kprobe(&kp) == 0) {
+		fn = (kallsyms_lookup_name_t)kp.addr;
+		unregister_kprobe(&kp);
+	}
+	return fn;
+}
 
 static int ipi_ackdata;
 
@@ -285,9 +318,15 @@ static int eem_cur_volt_show(struct seq_file *m, void *v)
 	memset(&eem_data, 0, sizeof(eem_data));
 	ipi_ret = eem_to_up(IPI_EEMSN_GET_EEM_VOLT, &eem_data);
 
-	log = mtk_get_eemsn_log();
+	/* call the dynamically-resolved getter (NEVER the weak symbol -> no trap) */
+	if (!eem_get_log) {
+		seq_printf(m, "ipi_ret:%d\nmtk_get_eemsn_log unresolved (kallsyms lookup failed at init)\n",
+			   ipi_ret);
+		return 0;
+	}
+	log = eem_get_log();
 	if (!log) {
-		seq_printf(m, "ipi_ret:%d\nmtk_get_eemsn_log() NULL — table unavailable\n",
+		seq_printf(m, "ipi_ret:%d\neem_get_log() returned NULL — table not ready\n",
 			   ipi_ret);
 		return 0;
 	}
@@ -424,8 +463,23 @@ static struct proc_dir_entry *eem_dir;
 
 static int __init rodin_eem_init(void)
 {
+	kallsyms_lookup_name_t kln;
 	void *ipidev;
 	int err;
+
+	/*
+	 * Resolve the unexported voltage-table getter via kallsyms (kprobe trick).
+	 * Failure is non-fatal: eem_get_log stays NULL and eem_cur_volt reports it
+	 * instead of trapping. The IPI write path (setclamp/offset) does not need it.
+	 */
+	kln = rodin_resolve_kln();
+	if (kln) {
+		eem_get_log = (get_eemsn_log_fn)kln("mtk_get_eemsn_log");
+		pr_info("rodin_eem: kallsyms ok, mtk_get_eemsn_log %s\n",
+			eem_get_log ? "resolved" : "NOT FOUND");
+	} else {
+		pr_warn("rodin_eem: kallsyms_lookup_name unresolved (no KPROBES?) — cur_volt readback off\n");
+	}
 
 	/* register the AP side of CH_S_EEMSN (eem-dbg normally does this) */
 	ipidev = get_mcupm_ipidev();
