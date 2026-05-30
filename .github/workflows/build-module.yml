@@ -1,0 +1,97 @@
+name: Build rodin_eem module (fast)
+
+# Workflow B do split: itera o rodin_eem.ko SEM rebuildar o kernel. Restaura o cache
+# (bazel + ws/) que a workflow A (build-kernel.yml) salvou e builda só o módulo
+# (~1min). Dispara em push que toca rodin_eem/** ou este arquivo.
+on:
+  push:
+    paths:
+      - 'rodin_eem/**'
+      - '.github/workflows/build-module.yml'
+  workflow_dispatch:
+
+env:
+  # Tem que bater com build-kernel.yml (mesmo KMI_TAG => mesma chave de cache).
+  KMI_TAG: android15-6.6.127_r00
+
+jobs:
+  module:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute kernel cache key
+        run: |
+          # IDÊNTICA à de build-kernel.yml. Hash sobre o que determina o kernel
+          # (NÃO inclui rodin_eem/) — assim mudar o módulo ainda casa o cache do kernel.
+          H=$(cat .github/workflows/build-kernel.yml \
+                  configs/*.fragment \
+                  rodin/* \
+                  patches/* 2>/dev/null | sha256sum | cut -c1-16)
+          KEY="kernel-${KMI_TAG}-${H}"
+          echo "CACHE_KEY=$KEY" >> "$GITHUB_ENV"
+          echo "[+] cache key = $KEY"
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+          df -h /
+
+      - name: Restore bazel cache + ws tree
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/bazel
+            ws
+          key: ${{ env.CACHE_KEY }}
+
+      - name: Guard — cache must be present
+        run: |
+          if [ "${{ steps.restore.outputs.cache-hit }}" != "true" ]; then
+            echo "[FAIL] cache miss para key=${CACHE_KEY}."
+            echo "       Rode a workflow A (Build Revenant Kernel) nesta branch primeiro"
+            echo "       pra popular o cache, depois re-push o módulo."
+            exit 1
+          fi
+          test -x ws/tools/bazel || { echo "[FAIL] ws/tools/bazel ausente — cache corrompido"; exit 1; }
+          echo "[+] cache restaurado, ws/ presente"
+
+      - name: Build rodin_eem.ko (kernel já em cache)
+        run: |
+          cd ws
+          mkdir -p common/rodin_eem
+          cp "$GITHUB_WORKSPACE/rodin_eem/rodin_eem.c" common/rodin_eem/
+          cp "$GITHUB_WORKSPACE/rodin_eem/BUILD.bazel"  common/rodin_eem/
+          # MESMOS flags do build do kernel em A — qualquer divergência = cache miss
+          # do Bazel => rebuild do kernel (lento). Mantém idêntico.
+          tools/bazel build --lto=thin --page_size=4k \
+            --defconfig_fragment=//common:arch/arm64/configs/revenant.fragment \
+            //common/rodin_eem:rodin_eem
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          KO=$(find -L bazel-bin -name rodin_eem.ko | head -1)
+          test -n "$KO"
+          cp -v "$KO" "$GITHUB_WORKSPACE/dist/rodin_eem.ko"
+
+      - name: Gates (vermagic + GOT + undefined syms)
+        run: |
+          KO="$GITHUB_WORKSPACE/dist/rodin_eem.ko"
+          echo "=== info ==="
+          strings "$KO" | grep -iE "vermagic|^name=|^depends=|/proc/eem ready" | head
+          echo "=== GOT reloc gate (loader rejeita R_AARCH64_*_GOT_*) ==="
+          if readelf -r "$KO" 2>/dev/null | grep -iE "GOT"; then
+            echo "[FAIL] GOT relocations presentes — insmod rejeitaria"
+            exit 1
+          fi
+          echo "[+] sem GOT — loader-compatível"
+          echo "=== undefined vendor syms (weak UND, resolvem no insmod) ==="
+          readelf -sW "$KO" 2>/dev/null \
+            | grep -iE "get_mcupm_ipidev|mtk_ipi_send_compl|mtk_ipi_register|mtk_get_eemsn_log"
+
+      - name: Upload rodin_eem.ko
+        uses: actions/upload-artifact@v4
+        with:
+          name: rodin_eem-ko-${{ github.run_number }}
+          path: dist/rodin_eem.ko
+          retention-days: 30
