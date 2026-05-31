@@ -1,0 +1,87 @@
+name: Build rodin_uv module (fast)
+
+# Mirror de build-module.yml mas pra rodin_uv. Reusa o cache do kernel (mesma
+# chave da workflow A). Builda só o .ko (~1min) e publica artifact.
+on:
+  push:
+    paths:
+      - 'rodin_uv/**'
+      - '.github/workflows/build-module-uv.yml'
+  workflow_dispatch:
+
+env:
+  KMI_TAG: android15-6.6.127_r00
+
+jobs:
+  module:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute kernel cache key
+        run: |
+          # IDÊNTICA à de build-kernel.yml. Hash sobre o que determina o kernel
+          # (NÃO inclui rodin_uv/ — mexer no módulo ainda casa o cache do kernel).
+          H=$(cat .github/workflows/build-kernel.yml \
+                  configs/*.fragment \
+                  rodin/* \
+                  patches/* 2>/dev/null | sha256sum | cut -c1-16)
+          KEY="kernel-${KMI_TAG}-${H}"
+          echo "CACHE_KEY=$KEY" >> "$GITHUB_ENV"
+          echo "[+] cache key = $KEY"
+
+      - name: Restore bazel cache + ws tree
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/bazel
+            ws
+          key: ${{ env.CACHE_KEY }}
+
+      - name: Guard — cache must be present
+        run: |
+          if [ "${{ steps.restore.outputs.cache-hit }}" != "true" ]; then
+            echo "[FAIL] cache miss para key=${CACHE_KEY}."
+            echo "       Rode a workflow A (Build Revenant Kernel) na main primeiro"
+            echo "       pra popular o cache, depois re-push."
+            exit 1
+          fi
+          test -x ws/tools/bazel || { echo "[FAIL] ws/tools/bazel ausente — cache corrompido"; exit 1; }
+          echo "[+] cache restaurado, ws/ presente"
+
+      - name: Build rodin_uv.ko (kernel já em cache)
+        run: |
+          cd ws
+          mkdir -p common/rodin_uv
+          cp "$GITHUB_WORKSPACE/rodin_uv/rodin_uv.c" common/rodin_uv/
+          cp "$GITHUB_WORKSPACE/rodin_uv/BUILD.bazel"  common/rodin_uv/
+          tools/bazel build --lto=thin --page_size=4k \
+            --defconfig_fragment=//common:arch/arm64/configs/revenant.fragment \
+            //common/rodin_uv:rodin_uv
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          KO=$(find -L bazel-bin -name rodin_uv.ko | head -1)
+          test -n "$KO"
+          cp -v "$KO" "$GITHUB_WORKSPACE/dist/rodin_uv.ko"
+
+      - name: Gates (vermagic + GOT + undefined syms)
+        run: |
+          KO="$GITHUB_WORKSPACE/dist/rodin_uv.ko"
+          echo "=== info ==="
+          strings "$KO" | grep -iE "vermagic|^name=|^depends=|rodin_uv: ready" | head
+          echo "=== GOT reloc gate (loader rejeita R_AARCH64_*_GOT_*) ==="
+          if readelf -r "$KO" 2>/dev/null | grep -iE "GOT"; then
+            echo "[FAIL] GOT relocations presentes — insmod rejeitaria"
+            exit 1
+          fi
+          echo "[+] sem GOT — loader-compatível"
+          echo "=== undefined regulator/kthread syms (devem ser GLOBAL UND, T do kernel) ==="
+          readelf -sW "$KO" 2>/dev/null \
+            | grep -iE "regulator_get_optional|regulator_set_voltage|regulator_get_voltage|regulator_put|kthread_run|kthread_stop|kthread_should_stop|proc_mkdir|proc_create|msleep_interruptible"
+
+      - name: Upload rodin_uv.ko
+        uses: actions/upload-artifact@v4
+        with:
+          name: rodin_uv-ko-${{ github.run_number }}
+          path: dist/rodin_uv.ko
+          retention-days: 30

@@ -1,0 +1,15 @@
+load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
+
+# rodin_uv — real Vproc/Vsram undervolt via regulator API + kthread race-win.
+# Same build pattern as rodin_eem (DDK module against Revenant GKI kernel,
+# KMI-matched vermagic android15-8-4k). All vendor symbols used here are GLOBAL
+# exports (regulator_get_optional/regulator_set_voltage/regulator_get_voltage/
+# regulator_put/kthread_*), no weak externs needed -> no GOT relocs possible.
+ddk_module(
+    name = "rodin_uv",
+    srcs = ["rodin_uv.c"],
+    out = "rodin_uv.ko",
+    hdrs = ["//common:all_headers"],
+    kernel_build = "//common:kernel_aarch64",
+    visibility = ["//visibility:public"],
+)
