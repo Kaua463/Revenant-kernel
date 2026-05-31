@@ -54,7 +54,7 @@
 #include <linux/atomic.h>
 #include <linux/err.h>
 
-/* Supply names — exactly as seen in /sys/class/regulator/regulator.*/name on
+/* Supply names — exactly as seen in /sys/class/regulator/regulator.N/name on
  * the rodin device. regulator_get_optional(NULL, name) finds the rdev by its
  * constraint_name in the global regulator list. */
 #define REG_VPROC_PRIME_NAME  "8_vbuck1"            /* mt6319-8 / regulator.11 */
