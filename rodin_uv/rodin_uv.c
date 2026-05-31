@@ -1,32 +1,33 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * rodin_uv.c v2 — Real Vproc undervolt for MT6899 (POCO X7 Pro / Dimensity 8400).
+ * rodin_uv.c v3 — Real Vproc undervolt for MT6899 (POCO X7 Pro / Dimensity 8400).
  *
  * History
  * -------
- * v1 (kthread @ 10Hz, both Vproc + Vsram): regulator API confirmed callable;
- * Vsram race we WIN (MCUPM does not defend Vsram), Vproc race we LOSE (Vproc
- * read kept reverting to MCUPM's values between our writes). Vsram side-effect
- * was harmful (Vsram=650mV persisted after rmmod — required reboot to restore).
+ * v1 (10Hz kthread on Vproc + Vsram): regulator API confirmed callable; Vsram
+ *   race won (lower Vsram persisted post-rmmod, harmful), Vproc race lost.
+ * v2 (kprobe on mtk_cpufreq_hw_target_index, Vproc-only): kprobe registered
+ *   successfully but kprobe_hits stayed at 0 even with DVFS clearly active.
+ *   Reason: rodin uses governor 'sugov_ext' (Xiaomi-extended schedutil) which
+ *   calls cpufreq_driver_fast_switch -> mtk_cpufreq_hw_fast_switch. The
+ *   target_index path is unused in this configuration.
  *
- * v2 (this file): drop Vsram entirely (factory MCUPM manages it, our touch was
- * net-negative), replace 10Hz kthread with a kprobe on the AP cpufreq driver's
- * mtk_cpufreq_hw_target_index. Fires AFTER every DVFS write the AP makes, in
- * the same context — minimal latency between MCUPM's write and our override.
- * If kprobe-driven reapply still loses to MCUPM, the race is between MCUPM's
- * own (firmware-internal, non-AP-observable) writes and ours; switch to direct
- * SPMI writes via spmi_ext_register_writel in v3 (needs mt6319 register map).
+ * v3 (this file):
+ *   - kprobe BOTH fast_switch (primary) and target_index (fallback for any
+ *     governor that doesn't use fast_switch).
+ *   - fast_switch is called from the scheduler in a possibly-atomic context;
+ *     regulator_set_voltage may sleep (mutex_lock). So the post_handler does
+ *     NOT call regulator directly — it schedules a work item on a dedicated
+ *     unbound workqueue. The work runs in process context, sleep-safe.
+ *   - Workqueue latency (~us-to-ms) is fine: MCUPM writes Vproc shortly after
+ *     fast_switch dispatches the DVFS request to it; our work running after
+ *     that lands AFTER MCUPM's write, which is exactly what wins the race.
  *
- * Vendor symbols used here are all GLOBAL T exports — strong externs, no GOT
- * relocs, no kallsyms trick (except for one local-static target, mtk_cpufreq_
- * hw_target_index, which we resolve via the kprobe-on-kallsyms_lookup_name
- * pattern that rodin_eem v4 validated).
- *
- * Safety
+ * Future
  * ------
- * - target_uv_prime is clamped to [UV_PRIME_MIN, UV_PRIME_MAX].
- * - enable=0 default; user must explicitly set target + enable.
- * - rmmod removes the kprobe; MCUPM regains full control immediately.
+ * If kprobe fires but Vproc still doesn't track target: fall back to direct
+ * SPMI writes via spmi_ext_register_writel on mt6319 (slave 8). Needs the
+ * mt6319 VBUCK1_VOL_CTRL register offset (not in /proc, would need RE).
  */
 
 #include <linux/kernel.h>
@@ -38,6 +39,7 @@
 #include <linux/string.h>
 #include <linux/regulator/consumer.h>
 #include <linux/kprobes.h>
+#include <linux/workqueue.h>
 #include <linux/atomic.h>
 #include <linux/err.h>
 
@@ -51,29 +53,29 @@ static struct regulator *prime_reg;
 static unsigned int target_uv_prime;
 static atomic_t enable_flag      = ATOMIC_INIT(0);
 static atomic_t applied_count    = ATOMIC_INIT(0);
-static atomic_t kprobe_hits      = ATOMIC_INIT(0);
+static atomic_t kp_hit_fastsw    = ATOMIC_INIT(0);
+static atomic_t kp_hit_target    = ATOMIC_INIT(0);
+static atomic_t work_runs        = ATOMIC_INIT(0);
 static atomic_t last_observed_uv = ATOMIC_INIT(0);
 static atomic_t last_set_result  = ATOMIC_INIT(0);
 
-/* kallsyms_lookup_name resolved via kprobe trick (the lookup itself is not
- * exported, but its address can be retrieved by registering a kprobe on it). */
 typedef unsigned long (*kln_t)(const char *name);
 static kln_t kln_fn;
 
-static struct kprobe dvfs_kp;
-static bool dvfs_kp_installed;
+static struct kprobe kp_fastsw;
+static struct kprobe kp_target;
+static bool kp_fastsw_installed;
+static bool kp_target_installed;
 
-static int dvfs_pre_handler(struct kprobe *p, struct pt_regs *regs)
-{
-	return 0;
-}
+static struct workqueue_struct *uv_wq;
+static struct work_struct apply_work;
 
-static void dvfs_post_handler(struct kprobe *p, struct pt_regs *regs,
-			      unsigned long flags)
+/* Workqueue handler — runs in process context, sleep-safe for regulator API */
+static void apply_work_fn(struct work_struct *w)
 {
 	int ret, new_v;
 
-	atomic_inc(&kprobe_hits);
+	atomic_inc(&work_runs);
 
 	if (!atomic_read(&enable_flag) || !target_uv_prime || !prime_reg)
 		return;
@@ -86,6 +88,28 @@ static void dvfs_post_handler(struct kprobe *p, struct pt_regs *regs,
 		if (new_v > 0)
 			atomic_set(&last_observed_uv, new_v);
 	}
+}
+
+/* kprobe post handlers — fast, atomic-safe; queue the real work */
+static int kp_noop_pre(struct kprobe *p, struct pt_regs *regs)
+{
+	return 0;
+}
+
+static void kp_post_fastsw(struct kprobe *p, struct pt_regs *regs,
+			   unsigned long flags)
+{
+	atomic_inc(&kp_hit_fastsw);
+	if (atomic_read(&enable_flag) && target_uv_prime && uv_wq)
+		queue_work(uv_wq, &apply_work);
+}
+
+static void kp_post_target(struct kprobe *p, struct pt_regs *regs,
+			   unsigned long flags)
+{
+	atomic_inc(&kp_hit_target);
+	if (atomic_read(&enable_flag) && target_uv_prime && uv_wq)
+		queue_work(uv_wq, &apply_work);
 }
 
 static int resolve_kln(void)
@@ -103,30 +127,30 @@ static int resolve_kln(void)
 	return 0;
 }
 
-static int install_dvfs_kprobe(void)
+static int install_one(struct kprobe *kp, const char *name,
+		       kprobe_post_handler_t post, bool *flag)
 {
 	unsigned long addr;
 	int ret;
 
 	if (!kln_fn)
 		return -ENOSYS;
-	addr = kln_fn("mtk_cpufreq_hw_target_index");
+	addr = kln_fn(name);
 	if (!addr) {
-		pr_err("rodin_uv: mtk_cpufreq_hw_target_index not found in kallsyms\n");
+		pr_warn("rodin_uv: %s not in kallsyms\n", name);
 		return -ENOENT;
 	}
-	memset(&dvfs_kp, 0, sizeof(dvfs_kp));
-	dvfs_kp.addr = (kprobe_opcode_t *)addr;
-	dvfs_kp.pre_handler = dvfs_pre_handler;
-	dvfs_kp.post_handler = dvfs_post_handler;
-	ret = register_kprobe(&dvfs_kp);
+	memset(kp, 0, sizeof(*kp));
+	kp->addr = (kprobe_opcode_t *)addr;
+	kp->pre_handler = kp_noop_pre;
+	kp->post_handler = post;
+	ret = register_kprobe(kp);
 	if (ret) {
-		pr_err("rodin_uv: register_kprobe(dvfs) failed: %d\n", ret);
+		pr_warn("rodin_uv: register_kprobe(%s) failed: %d\n", name, ret);
 		return ret;
 	}
-	dvfs_kp_installed = true;
-	pr_info("rodin_uv: kprobe installed @ mtk_cpufreq_hw_target_index = %lx\n",
-		addr);
+	*flag = true;
+	pr_info("rodin_uv: kprobe ON %s @ %lx\n", name, addr);
 	return 0;
 }
 
@@ -186,19 +210,25 @@ static int stats_show(struct seq_file *m, void *v)
 	int cur = prime_reg ? regulator_get_voltage(prime_reg) : -1;
 
 	seq_printf(m,
-		   "target_uv_prime:  %u\n"
-		   "enable:           %d\n"
-		   "kprobe_installed: %d\n"
-		   "kprobe_hits:      %d\n"
-		   "applied_count:    %d\n"
-		   "last_observed_uv: %d\n"
-		   "last_set_result:  %d\n"
-		   "prime_reg:        %s\n"
-		   "cur_proc_uv:      %d\n",
+		   "target_uv_prime:   %u\n"
+		   "enable:            %d\n"
+		   "kp_fastsw_on:      %d\n"
+		   "kp_target_on:      %d\n"
+		   "kp_hit_fastsw:     %d\n"
+		   "kp_hit_target:     %d\n"
+		   "work_runs:         %d\n"
+		   "applied_count:     %d\n"
+		   "last_observed_uv:  %d\n"
+		   "last_set_result:   %d\n"
+		   "prime_reg:         %s\n"
+		   "cur_proc_uv:       %d\n",
 		   target_uv_prime,
 		   atomic_read(&enable_flag),
-		   dvfs_kp_installed ? 1 : 0,
-		   atomic_read(&kprobe_hits),
+		   kp_fastsw_installed ? 1 : 0,
+		   kp_target_installed ? 1 : 0,
+		   atomic_read(&kp_hit_fastsw),
+		   atomic_read(&kp_hit_target),
+		   atomic_read(&work_runs),
 		   atomic_read(&applied_count),
 		   atomic_read(&last_observed_uv),
 		   atomic_read(&last_set_result),
@@ -240,23 +270,34 @@ static int __init rodin_uv_init(void)
 		prime_reg = NULL;
 	}
 
+	uv_wq = alloc_workqueue("rodin_uv", WQ_UNBOUND | WQ_HIGHPRI, 0);
+	if (!uv_wq) {
+		pr_err("rodin_uv: alloc_workqueue failed\n");
+		if (prime_reg)
+			regulator_put(prime_reg);
+		return -ENOMEM;
+	}
+	INIT_WORK(&apply_work, apply_work_fn);
+
 	err = resolve_kln();
 	if (err) {
-		pr_warn("rodin_uv: kallsyms_lookup_name unavailable (%d) — kprobe path off\n",
+		pr_warn("rodin_uv: kallsyms_lookup_name unavailable (%d) — kprobes off\n",
 			err);
 	} else {
-		err = install_dvfs_kprobe();
-		if (err) {
-			pr_warn("rodin_uv: dvfs kprobe install failed (%d) — running without race-win\n",
-				err);
-		}
+		install_one(&kp_fastsw, "mtk_cpufreq_hw_fast_switch",
+			    kp_post_fastsw, &kp_fastsw_installed);
+		install_one(&kp_target, "mtk_cpufreq_hw_target_index",
+			    kp_post_target, &kp_target_installed);
 	}
 
 	uv_dir = proc_mkdir("rodin_uv", NULL);
 	if (!uv_dir) {
 		pr_err("rodin_uv: proc_mkdir failed\n");
-		if (dvfs_kp_installed)
-			unregister_kprobe(&dvfs_kp);
+		if (kp_fastsw_installed)
+			unregister_kprobe(&kp_fastsw);
+		if (kp_target_installed)
+			unregister_kprobe(&kp_target);
+		destroy_workqueue(uv_wq);
 		if (prime_reg)
 			regulator_put(prime_reg);
 		return -ENOMEM;
@@ -265,17 +306,28 @@ static int __init rodin_uv_init(void)
 	proc_create("enable",          0664, uv_dir, &enable_ops);
 	proc_create("stats",           0444, uv_dir, &stats_ops);
 
-	pr_info("rodin_uv v2 ready: prime_reg=%s kprobe=%s /proc/rodin_uv/ created\n",
+	pr_info("rodin_uv v3 ready: prime_reg=%s kp_fastsw=%s kp_target=%s /proc/rodin_uv/ created\n",
 		prime_reg ? "OK" : "NULL",
-		dvfs_kp_installed ? "ON" : "OFF");
+		kp_fastsw_installed ? "ON" : "OFF",
+		kp_target_installed ? "ON" : "OFF");
 	return 0;
 }
 
 static void __exit rodin_uv_exit(void)
 {
-	if (dvfs_kp_installed) {
-		unregister_kprobe(&dvfs_kp);
-		dvfs_kp_installed = false;
+	atomic_set(&enable_flag, 0);
+	if (kp_fastsw_installed) {
+		unregister_kprobe(&kp_fastsw);
+		kp_fastsw_installed = false;
+	}
+	if (kp_target_installed) {
+		unregister_kprobe(&kp_target);
+		kp_target_installed = false;
+	}
+	if (uv_wq) {
+		flush_workqueue(uv_wq);
+		destroy_workqueue(uv_wq);
+		uv_wq = NULL;
 	}
 	proc_remove(uv_dir);
 	if (prime_reg)
@@ -285,6 +337,6 @@ static void __exit rodin_uv_exit(void)
 module_init(rodin_uv_init);
 module_exit(rodin_uv_exit);
 
-MODULE_DESCRIPTION("Revenant rodin_uv v2 — Vproc undervolt for MT6899 via regulator API + kprobe on mtk_cpufreq_hw_target_index");
+MODULE_DESCRIPTION("Revenant rodin_uv v3 — Vproc undervolt for MT6899 via regulator API + kprobe on fast_switch/target_index + workqueue");
 MODULE_AUTHOR("Kaua / Revenant");
 MODULE_LICENSE("GPL v2");
