@@ -1,0 +1,16 @@
+load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
+
+# rodin_pmic_dbg — port of Mediatek's mtk-spmi-pmic-debug.ko from the
+# Mayuri-Chan/MTK_kernel_device_modules_6.6 tree. Probes the DTS node
+# already present on rodin (compatible "mediatek,spmi-pmic-debug" under
+# mt6319@8) and exposes a sysfs pmic_access attr that reads/writes ANY
+# register on the matched SPMI slave. All deps (regmap, spmi, platform
+# driver, of_device) are core kernel — no vendor weak externs needed.
+ddk_module(
+    name = "rodin_pmic_dbg",
+    srcs = ["rodin_pmic_dbg.c"],
+    out = "rodin_pmic_dbg.ko",
+    hdrs = ["//common:all_headers"],
+    kernel_build = "//common:kernel_aarch64",
+    visibility = ["//visibility:public"],
+)
