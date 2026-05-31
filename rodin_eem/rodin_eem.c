@@ -247,7 +247,10 @@ static ssize_t eem_offset_write(struct file *f, const char __user *ubuf,
  * the abs numbers look off.
  */
 #define EEM_PMIC_STEP_UV	6250
-#define EEM_PMIC_BASE_UV	400000
+/* v5/v6: base calibrated to 0V (mt6363/mt6319 bucks code 0 == 0V), validated
+ * against on-device readback where prime opp0(3.25GHz) factory pmic=0xb8 reads
+ * 1150mV = 184 * 6.25 + 0. 0.4V base would have given 1550mV (implausible). */
+#define EEM_PMIC_BASE_UV	0
 
 static int eem_code_to_uv(unsigned char code)
 {
@@ -292,34 +295,56 @@ static int eem_cur_volt_show(struct seq_file *m, void *v)
 		lock = log->lock;
 	} while ((lock & 0x1) && (++lim < 5));
 
-	seq_printf(m, "ipi_ret:%d  (abs mV = est @6.25mV/step,0.4V base; DELTA is exact)\n",
+	seq_printf(m, "ipi_ret:%d  (abs mV = est @6.25mV/step,0V base; DELTA is exact)\n",
 		   ipi_ret);
+	/* v6: dump full eemsn_log header — reveals aging/cal flags. */
+	seq_printf(m,
+		   "log_header: eemsn_disable=0x%x ctrl_aging_Enable=0x%x sn_disable=0x%x segCode=0x%x\n"
+		   "            init2_v_ready=%u init_vboot_done=%u lock=0x%x eemsn_log_en=%u\n",
+		   log->eemsn_disable, log->ctrl_aging_Enable,
+		   log->sn_disable, log->segCode,
+		   log->init2_v_ready, log->init_vboot_done,
+		   log->lock, log->eemsn_log_en);
 
 	for (bank = 0; bank < NR_EEMSN_DET; bank++) {
 		struct eemsn_log_det *d = &log->det_log[bank];
 		unsigned int n = d->num_freq_tbl;
 
-		seq_printf(m, "det%d(%s) num_freq=%u clamp=%d offset=%d\n",
+		/* v6: print temp + features + raw det_id alongside clamp/offset. */
+		seq_printf(m,
+			   "det%d(%s) num_freq=%u clamp=%d offset=%d temp=%u features=0x%x det_id_raw=%d\n",
 			   bank, eem_det_name[bank], n,
-			   d->volt_clamp, d->volt_offset);
+			   d->volt_clamp, d->volt_offset,
+			   d->temp, d->features, (int)d->det_id);
 		if (n > NR_FREQ)		/* sanity bound vs layout drift */
 			n = NR_FREQ;
 		for (i = 0; i < (int)n; i++) {
-			unsigned char orig = d->volt_tbl_orig[i];
-			unsigned char pmic = d->volt_tbl_pmic[i];
-			int delta_uv;
+			unsigned char orig  = d->volt_tbl_orig[i];
+			unsigned char pmic  = d->volt_tbl_pmic[i];
+			unsigned char init2 = d->volt_tbl_init2[i];
+			int delta_uv, init2_vs_pmic_uv;
 
 			if (d->freq_tbl[i] == 0)
 				break;
 			delta_uv = ((int)orig - (int)pmic) * EEM_PMIC_STEP_UV;
+			init2_vs_pmic_uv = ((int)init2 - (int)pmic) * EEM_PMIC_STEP_UV;
 
+			/* v6: init2 = factory characterized voltage (idle/init).
+			 * init2 vs pmic shows runtime adjustment relative to init.
+			 * if init2 > pmic: factory boot voltage was higher than
+			 * current applied = EEM trimmed beyond init2.
+			 * if init2 == pmic: no further trim happened. */
 			seq_printf(m, "  opp%-2d freq=%-5hu orig=0x%02x(",
 				   i, d->freq_tbl[i], orig);
 			eem_seq_mv(m, eem_code_to_uv(orig));
 			seq_printf(m, "mV) pmic=0x%02x(", pmic);
 			eem_seq_mv(m, eem_code_to_uv(pmic));
-			seq_puts(m, "mV) delta=");
+			seq_printf(m, "mV) init2=0x%02x(", init2);
+			eem_seq_mv(m, eem_code_to_uv(init2));
+			seq_puts(m, "mV) d_op=");
 			eem_seq_mv(m, delta_uv);
+			seq_puts(m, "mV d_i2p=");
+			eem_seq_mv(m, init2_vs_pmic_uv);
 			seq_puts(m, "mV\n");
 		}
 	}
