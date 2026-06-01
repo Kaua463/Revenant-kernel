@@ -474,6 +474,53 @@ static const struct proc_ops hbvc_dump_ops = {
 	.proc_lseek = seq_lseek, .proc_release = single_release,
 };
 
+/* /proc/rodin_shared_hack/hbvc_write — write u32 at offset in HBVC region.
+ * Format: "<hex_off> <hex_val>"
+ * If DEVAPC blocks, write triggers violation logged in dmesg + /proc/devapc_dbg.
+ * If permits, write goes directly to PMIF interface. */
+static ssize_t hbvc_write(struct file *f, const char __user *ub,
+			  size_t n, loff_t *o)
+{
+	char buf[64];
+	u32 off = 0, val = 0;
+
+	if (!hbvc_va)
+		return -ENODEV;
+	if (!n || n >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ub, n))
+		return -EFAULT;
+	buf[n] = '\0';
+	if (sscanf(buf, "%x %x", &off, &val) != 2)
+		return -EINVAL;
+	if (off >= HBVC_SIZE - 3 || (off & 3))
+		return -EINVAL;
+
+	writel(val, hbvc_va + off);
+	wmb();
+	pr_info("rodin_shared_hack: HBVC write phys=0x%lx+0x%x = 0x%x\n",
+		HBVC_PA, off, val);
+	return n;
+}
+
+static int hbvc_write_show(struct seq_file *m, void *v)
+{
+	seq_puts(m, "write: \"<hex_off> <hex_val>\" — writes u32 to HBVC region\n");
+	seq_puts(m, "Risk: DEVAPC violation possible. Monitor /proc/devapc_dbg + dmesg\n");
+	return 0;
+}
+
+static int hbvc_write_open(struct inode *i, struct file *f)
+{
+	return single_open(f, hbvc_write_show, NULL);
+}
+
+static const struct proc_ops hbvc_write_ops = {
+	.proc_open = hbvc_write_open, .proc_read = seq_read,
+	.proc_lseek = seq_lseek, .proc_release = single_release,
+	.proc_write = hbvc_write,
+};
+
 static struct proc_dir_entry *hack_dir;
 
 static int __init rodin_shared_hack_init(void)
@@ -513,8 +560,9 @@ static int __init rodin_shared_hack_init(void)
 	 * proc first (only the 4 AP-confirmed offsets), THEN hbvc_dump if safe. */
 	hbvc_va = ioremap(HBVC_PA, HBVC_SIZE);
 	if (hbvc_va) {
-		proc_create("hbvc_safe", 0444, hack_dir, &hbvc_safe_ops);
-		proc_create("hbvc_dump", 0444, hack_dir, &hbvc_dump_ops);
+		proc_create("hbvc_safe",  0444, hack_dir, &hbvc_safe_ops);
+		proc_create("hbvc_dump",  0444, hack_dir, &hbvc_dump_ops);
+		proc_create("hbvc_write", 0664, hack_dir, &hbvc_write_ops);
 		pr_info("rodin_shared_hack: hbvc mapped phys 0x%lx (size 0x%x)\n",
 			HBVC_PA, HBVC_SIZE);
 	} else {
