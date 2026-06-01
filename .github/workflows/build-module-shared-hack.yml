@@ -1,0 +1,61 @@
+name: Build rodin_shared_hack module (fast)
+
+on:
+  push:
+    paths:
+      - 'rodin_shared_hack/**'
+      - '.github/workflows/build-module-shared-hack.yml'
+  workflow_dispatch:
+
+env:
+  KMI_TAG: android15-6.6.127_r00
+
+jobs:
+  module:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute kernel cache key
+        run: |
+          H=$(cat .github/workflows/build-kernel.yml \
+                  configs/*.fragment rodin/* patches/* 2>/dev/null \
+              | sha256sum | cut -c1-16)
+          echo "CACHE_KEY=kernel-${KMI_TAG}-${H}" >> "$GITHUB_ENV"
+      - name: Restore bazel cache + ws tree
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/bazel
+            ws
+          key: ${{ env.CACHE_KEY }}
+      - name: Guard cache
+        run: |
+          if [ "${{ steps.restore.outputs.cache-hit }}" != "true" ]; then
+            echo "[FAIL] cache miss"; exit 1
+          fi
+      - name: Build rodin_shared_hack.ko
+        run: |
+          cd ws
+          mkdir -p common/rodin_shared_hack
+          cp "$GITHUB_WORKSPACE/rodin_shared_hack/rodin_shared_hack.c" common/rodin_shared_hack/
+          cp "$GITHUB_WORKSPACE/rodin_shared_hack/BUILD.bazel"          common/rodin_shared_hack/
+          tools/bazel build --lto=thin --page_size=4k \
+            --defconfig_fragment=//common:arch/arm64/configs/revenant.fragment \
+            //common/rodin_shared_hack:rodin_shared_hack
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          KO=$(find -L bazel-bin -name rodin_shared_hack.ko | head -1)
+          cp -v "$KO" "$GITHUB_WORKSPACE/dist/rodin_shared_hack.ko"
+      - name: Gates
+        run: |
+          KO="$GITHUB_WORKSPACE/dist/rodin_shared_hack.ko"
+          strings "$KO" | grep -iE "vermagic|name=|rodin_shared_hack" | head
+          if readelf -r "$KO" 2>/dev/null | grep -iE "GOT"; then
+            echo "[FAIL] GOT relocs"; exit 1
+          fi
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: rodin_shared_hack-ko-${{ github.run_number }}
+          path: dist/rodin_shared_hack.ko
+          retention-days: 30

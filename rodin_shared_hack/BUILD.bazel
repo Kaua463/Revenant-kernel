@@ -1,0 +1,10 @@
+load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
+
+ddk_module(
+    name = "rodin_shared_hack",
+    srcs = ["rodin_shared_hack.c"],
+    out = "rodin_shared_hack.ko",
+    hdrs = ["//common:all_headers"],
+    kernel_build = "//common:kernel_aarch64",
+    visibility = ["//visibility:public"],
+)
