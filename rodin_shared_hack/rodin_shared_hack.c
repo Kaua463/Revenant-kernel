@@ -42,6 +42,19 @@
 #define GPUEB_SHARED_PA          0x7F880000UL
 #define GPUFREQ_SHARED_SIZE      0x4000           /* first sub-region = gpufreq */
 
+/* MTK cpufreq-hw CSRAM (mediatek-cpufreq-hw_main.c, mt6899 DTS):
+ * 3 clusters performance-domain0/1/2 at 0x0c0dd360 / 0x480 / 0x5a0, 0x120 bytes each.
+ * LUT_FREQ = data & 0xFFF, freq_khz = freq_field * 1000. LUT_ROW_SIZE = 4. MAX = 32.
+ */
+#define CPULUT_PA                0x0c0dd000UL
+#define CPULUT_SIZE              0x1000           /* page-aligned, covers all 3 clusters */
+#define CPULUT_OFF_PD0           0x360            /* eff cluster (cpu0-3) */
+#define CPULUT_OFF_PD1           0x480            /* perf cluster (cpu4-6) */
+#define CPULUT_OFF_PD2           0x5A0            /* prime cluster (cpu7) */
+#define CPULUT_PER_DOMAIN        0x120            /* per-domain register block */
+#define CPULUT_MAX_ENTRIES       32
+#define CPULUT_FREQ_MASK         0xFFF            /* GENMASK(11, 0) */
+
 /* Offsets in struct gpufreq_shared_status (Mayuri-Chan MT6899 source) */
 #define OFF_MAGIC                0x000
 #define OFF_CUR_OPPIDX_GPU       0x004
@@ -58,6 +71,7 @@
 #define TEST_PRIVILEGE           2
 
 static void __iomem *shared_va;
+static void __iomem *cpulut_va;
 static u32 last_set_test_mode;
 
 static int snap_show(struct seq_file *m, void *v)
@@ -287,6 +301,93 @@ static const struct proc_ops peek_ops = {
 	.proc_write = peek_write,
 };
 
+/* /proc/rodin_shared_hack/cpu_lut — dump all 32 LUT entries x 3 clusters
+ * from CSRAM 0x0c0dd360/0x480/0x5a0 (mtk_cpufreq_hw CSRAM).
+ * Each entry: u32 raw, low 12 bits = freq_field, freq_khz = freq_field * 1000.
+ * Working entries: until "freq == prev_freq" (driver break condition).
+ * Hidden entries: anything past that with different freq.
+ */
+static const struct {
+	const char *name;
+	u32 off;
+} cpulut_clusters[3] = {
+	{ "eff   (cpu0-3, retail max 2100)", CPULUT_OFF_PD0 },
+	{ "perf  (cpu4-6, retail max 3000)", CPULUT_OFF_PD1 },
+	{ "prime (cpu7,   retail max 3250)", CPULUT_OFF_PD2 },
+};
+
+static int cpu_lut_show(struct seq_file *m, void *v)
+{
+	int c, i;
+	u32 raw, freq_field, freq_khz, prev_freq;
+	int working_count, hidden_count;
+
+	if (!cpulut_va) {
+		seq_puts(m, "cpulut_va = NULL (ioremap failed)\n");
+		return 0;
+	}
+
+	seq_printf(m, "CSRAM mapped: phys=0x%lx, va=%p, size=0x%x\n\n",
+		CPULUT_PA, cpulut_va, CPULUT_SIZE);
+
+	for (c = 0; c < 3; c++) {
+		u32 cluster_off = cpulut_clusters[c].off;
+
+		seq_printf(m, "=== Cluster %d: %s ===\n", c, cpulut_clusters[c].name);
+		seq_puts(m, "  idx  raw         freq(MHz)  state\n");
+
+		prev_freq = 0;
+		working_count = 0;
+		hidden_count = 0;
+
+		for (i = 0; i < CPULUT_MAX_ENTRIES; i++) {
+			raw = readl(cpulut_va + cluster_off + (i * 4));
+			freq_field = raw & CPULUT_FREQ_MASK;
+			freq_khz = freq_field * 1000;
+
+			if (i == 0) {
+				seq_printf(m, "  [%02d] 0x%08x  %5u      working\n",
+					i, raw, freq_khz / 1000);
+				working_count = 1;
+			} else if (freq_khz == prev_freq) {
+				/* driver would break here: working ends */
+				if (working_count > 0 && hidden_count == 0) {
+					seq_printf(m, "       --- driver break (freq == prev) ---\n");
+				}
+				seq_printf(m, "  [%02d] 0x%08x  %5u      pad (repeat)\n",
+					i, raw, freq_khz / 1000);
+			} else if (freq_khz == 0) {
+				if (working_count > 0 && hidden_count == 0)
+					seq_printf(m, "       --- working set ended ---\n");
+				seq_printf(m, "  [%02d] 0x%08x  %5u      empty\n",
+					i, raw, freq_khz / 1000);
+			} else if (working_count > 0 && working_count == i) {
+				seq_printf(m, "  [%02d] 0x%08x  %5u      working\n",
+					i, raw, freq_khz / 1000);
+				working_count++;
+			} else {
+				seq_printf(m, "  [%02d] 0x%08x  %5u      *** HIDDEN ***\n",
+					i, raw, freq_khz / 1000);
+				hidden_count++;
+			}
+			prev_freq = freq_khz;
+		}
+		seq_printf(m, "  -> working: %d entries, hidden: %d entries\n\n",
+			working_count, hidden_count);
+	}
+	return 0;
+}
+
+static int cpu_lut_open(struct inode *i, struct file *f)
+{
+	return single_open(f, cpu_lut_show, NULL);
+}
+
+static const struct proc_ops cpu_lut_ops = {
+	.proc_open = cpu_lut_open, .proc_read = seq_read,
+	.proc_lseek = seq_lseek, .proc_release = single_release,
+};
+
 static struct proc_dir_entry *hack_dir;
 
 static int __init rodin_shared_hack_init(void)
@@ -310,6 +411,18 @@ static int __init rodin_shared_hack_init(void)
 	proc_create("find",      0664, hack_dir, &find_ops);
 	proc_create("peek",      0664, hack_dir, &peek_ops);
 
+	/* CSRAM CPU LUT mapping (read-only, dump only). Best effort: if it
+	 * fails (DEVAPC or wrong addr), the gpufreq path still works. */
+	cpulut_va = ioremap(CPULUT_PA, CPULUT_SIZE);
+	if (cpulut_va) {
+		proc_create("cpu_lut", 0444, hack_dir, &cpu_lut_ops);
+		pr_info("rodin_shared_hack: cpulut mapped phys 0x%lx (size 0x%x)\n",
+			CPULUT_PA, CPULUT_SIZE);
+	} else {
+		pr_warn("rodin_shared_hack: ioremap CSRAM 0x%lx failed (cpu_lut disabled)\n",
+			CPULUT_PA);
+	}
+
 	pr_info("rodin_shared_hack: mapped phys 0x%lx (size 0x%x), test_mode read = %u\n",
 		GPUEB_SHARED_PA, GPUFREQ_SHARED_SIZE,
 		readl(shared_va + OFF_TEST_MODE));
@@ -322,6 +435,10 @@ static void __exit rodin_shared_hack_exit(void)
 	if (shared_va) {
 		iounmap(shared_va);
 		shared_va = NULL;
+	}
+	if (cpulut_va) {
+		iounmap(cpulut_va);
+		cpulut_va = NULL;
 	}
 }
 
