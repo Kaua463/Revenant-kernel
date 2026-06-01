@@ -196,6 +196,97 @@ static const struct proc_ops raw_ops = {
 	.proc_write = raw_write,
 };
 
+/* /proc/rodin_shared_hack/find — read returns offsets where given u32 lives.
+ * Usage: write "0x13D620" (= 1300000 freq) -> read shows hex offsets. */
+static u32 g_find_value;
+
+static int find_show(struct seq_file *m, void *v)
+{
+	int i, n = 0;
+	if (!shared_va) {
+		seq_puts(m, "ENODEV\n");
+		return 0;
+	}
+	seq_printf(m, "searching for 0x%08x in 0x%x bytes...\n",
+		g_find_value, GPUFREQ_SHARED_SIZE);
+	for (i = 0; i < GPUFREQ_SHARED_SIZE - 3; i += 4) {
+		if (readl(shared_va + i) == g_find_value) {
+			seq_printf(m, "  hit @ 0x%04x\n", i);
+			n++;
+			if (n >= 20) {
+				seq_puts(m, "  ... (cap 20)\n");
+				break;
+			}
+		}
+	}
+	seq_printf(m, "total: %d\n", n);
+	return 0;
+}
+
+static ssize_t find_write(struct file *f, const char __user *ub,
+			  size_t n, loff_t *o)
+{
+	char buf[32];
+	if (!n || n >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ub, n))
+		return -EFAULT;
+	buf[n] = '\0';
+	if (kstrtouint(strim(buf), 0, &g_find_value))
+		return -EINVAL;
+	return n;
+}
+
+static int find_open(struct inode *i, struct file *f)
+{
+	return single_open(f, find_show, NULL);
+}
+
+static const struct proc_ops find_ops = {
+	.proc_open = find_open, .proc_read = seq_read,
+	.proc_lseek = seq_lseek, .proc_release = single_release,
+	.proc_write = find_write,
+};
+
+/* /proc/rodin_shared_hack/peek — show 4-byte aligned u32 at offset given via write */
+static u32 g_peek_offset;
+
+static int peek_show(struct seq_file *m, void *v)
+{
+	if (!shared_va || g_peek_offset >= GPUFREQ_SHARED_SIZE - 3) {
+		seq_printf(m, "off=0x%x: invalid\n", g_peek_offset);
+		return 0;
+	}
+	seq_printf(m, "off=0x%04x: 0x%08x  (u32 le)\n",
+		g_peek_offset, readl(shared_va + g_peek_offset));
+	return 0;
+}
+
+static ssize_t peek_write(struct file *f, const char __user *ub,
+			  size_t n, loff_t *o)
+{
+	char buf[32];
+	if (!n || n >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ub, n))
+		return -EFAULT;
+	buf[n] = '\0';
+	if (kstrtouint(strim(buf), 0, &g_peek_offset))
+		return -EINVAL;
+	return n;
+}
+
+static int peek_open(struct inode *i, struct file *f)
+{
+	return single_open(f, peek_show, NULL);
+}
+
+static const struct proc_ops peek_ops = {
+	.proc_open = peek_open, .proc_read = seq_read,
+	.proc_lseek = seq_lseek, .proc_release = single_release,
+	.proc_write = peek_write,
+};
+
 static struct proc_dir_entry *hack_dir;
 
 static int __init rodin_shared_hack_init(void)
@@ -216,6 +307,8 @@ static int __init rodin_shared_hack_init(void)
 	proc_create("snap",      0444, hack_dir, &snap_ops);
 	proc_create("test_mode", 0664, hack_dir, &test_mode_ops);
 	proc_create("raw_write", 0664, hack_dir, &raw_ops);
+	proc_create("find",      0664, hack_dir, &find_ops);
+	proc_create("peek",      0664, hack_dir, &peek_ops);
 
 	pr_info("rodin_shared_hack: mapped phys 0x%lx (size 0x%x), test_mode read = %u\n",
 		GPUEB_SHARED_PA, GPUFREQ_SHARED_SIZE,
