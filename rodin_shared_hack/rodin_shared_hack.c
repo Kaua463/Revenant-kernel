@@ -42,6 +42,19 @@
 #define GPUEB_SHARED_PA          0x7F880000UL
 #define GPUFREQ_SHARED_SIZE      0x4000           /* first sub-region = gpufreq */
 
+/* MFG_HBVC region (gpufreq_reg_mt6899.h) — GPU Hardware Bus Voltage Control.
+ * AP source devm_ioremaps this for debug-only reads (FLL/GRP frontend/backend).
+ * GPUEB has __gpufreq_hbvc_set_vlower_gpu/_stack which writes elsewhere in
+ * this same region. Risk: DEVAPC protected on some offsets — we read SAFE
+ * known-AP offsets first (0x400/0x404/0x480/0x484), then sweep cautiously.
+ */
+#define HBVC_PA                  0x13F50000UL
+#define HBVC_SIZE                0x1000
+#define HBVC_OFF_FLL0_FRONTEND   0x400  /* AP confirmed reads */
+#define HBVC_OFF_FLL1_FRONTEND   0x404
+#define HBVC_OFF_GRP0_BACKEND    0x480
+#define HBVC_OFF_GRP1_BACKEND    0x484
+
 /* MTK cpufreq-hw CSRAM (mediatek-cpufreq-hw_main.c, mt6899 DTS):
  * 3 clusters performance-domain0/1/2 at 0x0c0dd360 / 0x480 / 0x5a0, 0x120 bytes each.
  * LUT_FREQ = data & 0xFFF, freq_khz = freq_field * 1000. LUT_ROW_SIZE = 4. MAX = 32.
@@ -72,6 +85,7 @@
 
 static void __iomem *shared_va;
 static void __iomem *cpulut_va;
+static void __iomem *hbvc_va;
 static u32 last_set_test_mode;
 
 static int snap_show(struct seq_file *m, void *v)
@@ -388,6 +402,78 @@ static const struct proc_ops cpu_lut_ops = {
 	.proc_lseek = seq_lseek, .proc_release = single_release,
 };
 
+/* /proc/rodin_shared_hack/hbvc_safe — read ONLY the 4 offsets AP source
+ * already reads safely (debug frontend/backend regs). Validates ioremap +
+ * region accessibility before any sweep. If this prints values != 0xdeadbeef
+ * == AP read access works, region not gated for reads in those slots. */
+static int hbvc_safe_show(struct seq_file *m, void *v)
+{
+	if (!hbvc_va) {
+		seq_puts(m, "hbvc_va = NULL (ioremap failed)\n");
+		return 0;
+	}
+	seq_printf(m, "HBVC region: phys=0x%lx va=%p size=0x%x\n\n",
+		HBVC_PA, hbvc_va, HBVC_SIZE);
+	seq_printf(m, "  +0x400 FLL0_DBG_FRONTEND0 = 0x%08x\n",
+		readl(hbvc_va + HBVC_OFF_FLL0_FRONTEND));
+	seq_printf(m, "  +0x404 FLL1_DBG_FRONTEND0 = 0x%08x\n",
+		readl(hbvc_va + HBVC_OFF_FLL1_FRONTEND));
+	seq_printf(m, "  +0x480 GRP0_DBG_BACKEND0  = 0x%08x\n",
+		readl(hbvc_va + HBVC_OFF_GRP0_BACKEND));
+	seq_printf(m, "  +0x484 GRP1_DBG_BACKEND0  = 0x%08x\n",
+		readl(hbvc_va + HBVC_OFF_GRP1_BACKEND));
+	return 0;
+}
+
+static int hbvc_safe_open(struct inode *i, struct file *f)
+{
+	return single_open(f, hbvc_safe_show, NULL);
+}
+
+static const struct proc_ops hbvc_safe_ops = {
+	.proc_open = hbvc_safe_open, .proc_read = seq_read,
+	.proc_lseek = seq_lseek, .proc_release = single_release,
+};
+
+/* /proc/rodin_shared_hack/hbvc_dump — sweep 0x000..0xFFC, show non-zero u32s.
+ * Risk: DEVAPC may abort on protected offsets. Catch via try/except via
+ * readl alone (kernel will OOPS on bad read, but we accept that risk on
+ * first probe — module reload recovers). */
+static int hbvc_dump_show(struct seq_file *m, void *v)
+{
+	int off;
+	u32 val;
+	int total_nonzero = 0;
+	if (!hbvc_va) {
+		seq_puts(m, "hbvc_va = NULL\n");
+		return 0;
+	}
+	seq_printf(m, "HBVC sweep (showing non-zero u32 u4-aligned):\n");
+	for (off = 0; off < HBVC_SIZE; off += 4) {
+		val = readl(hbvc_va + off);
+		if (val) {
+			seq_printf(m, "  +0x%03x = 0x%08x\n", off, val);
+			total_nonzero++;
+			if (total_nonzero > 200) {
+				seq_puts(m, "  ... cap 200 hits\n");
+				break;
+			}
+		}
+	}
+	seq_printf(m, "total non-zero: %d\n", total_nonzero);
+	return 0;
+}
+
+static int hbvc_dump_open(struct inode *i, struct file *f)
+{
+	return single_open(f, hbvc_dump_show, NULL);
+}
+
+static const struct proc_ops hbvc_dump_ops = {
+	.proc_open = hbvc_dump_open, .proc_read = seq_read,
+	.proc_lseek = seq_lseek, .proc_release = single_release,
+};
+
 static struct proc_dir_entry *hack_dir;
 
 static int __init rodin_shared_hack_init(void)
@@ -423,6 +509,18 @@ static int __init rodin_shared_hack_init(void)
 			CPULUT_PA);
 	}
 
+	/* MFG_HBVC mapping (read-only). DEVAPC risk on sweep — use hbvc_safe
+	 * proc first (only the 4 AP-confirmed offsets), THEN hbvc_dump if safe. */
+	hbvc_va = ioremap(HBVC_PA, HBVC_SIZE);
+	if (hbvc_va) {
+		proc_create("hbvc_safe", 0444, hack_dir, &hbvc_safe_ops);
+		proc_create("hbvc_dump", 0444, hack_dir, &hbvc_dump_ops);
+		pr_info("rodin_shared_hack: hbvc mapped phys 0x%lx (size 0x%x)\n",
+			HBVC_PA, HBVC_SIZE);
+	} else {
+		pr_warn("rodin_shared_hack: ioremap HBVC 0x%lx failed\n", HBVC_PA);
+	}
+
 	pr_info("rodin_shared_hack: mapped phys 0x%lx (size 0x%x), test_mode read = %u\n",
 		GPUEB_SHARED_PA, GPUFREQ_SHARED_SIZE,
 		readl(shared_va + OFF_TEST_MODE));
@@ -439,6 +537,10 @@ static void __exit rodin_shared_hack_exit(void)
 	if (cpulut_va) {
 		iounmap(cpulut_va);
 		cpulut_va = NULL;
+	}
+	if (hbvc_va) {
+		iounmap(hbvc_va);
+		hbvc_va = NULL;
 	}
 }
 
