@@ -212,7 +212,7 @@ static ssize_t call_write(struct file *f, const char __user *ub,
 	last_call_a1 = res.a1;
 	last_call_a2 = res.a2;
 	last_call_a3 = res.a3;
-	pr_info("rodin_smc_probe: call fid=0x%llx a1=0x%llx a2=0x%llx → a0=0x%llx a1_out=0x%llx\n",
+	pr_info("rodin_smc_probe: call fid=0x%llx a1=0x%llx a2=0x%llx → a0=0x%lx a1_out=0x%lx\n",
 		args[0], args[1], args[2], res.a0, res.a1);
 	return n;
 }
