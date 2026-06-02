@@ -185,6 +185,60 @@ static const struct proc_ops result_ops = {
 	.proc_lseek = seq_lseek, .proc_release = single_release,
 };
 
+/* /proc/rodin_smc_probe/call — full SMC call with custom args */
+static u64 last_call_fid, last_call_a0, last_call_a1, last_call_a2, last_call_a3;
+
+static ssize_t call_write(struct file *f, const char __user *ub,
+			  size_t n, loff_t *o)
+{
+	char buf[128];
+	u64 args[7] = {0};
+	struct arm_smccc_res res = {0};
+
+	if (!n || n >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ub, n))
+		return -EFAULT;
+	buf[n] = '\0';
+	if (sscanf(buf, "%llx %llx %llx %llx %llx %llx %llx",
+		   &args[0], &args[1], &args[2], &args[3],
+		   &args[4], &args[5], &args[6]) < 1)
+		return -EINVAL;
+
+	arm_smccc_smc(args[0], args[1], args[2], args[3],
+		      args[4], args[5], args[6], 0, &res);
+	last_call_fid = args[0];
+	last_call_a0 = res.a0;
+	last_call_a1 = res.a1;
+	last_call_a2 = res.a2;
+	last_call_a3 = res.a3;
+	pr_info("rodin_smc_probe: call fid=0x%llx a1=0x%llx a2=0x%llx → a0=0x%llx a1_out=0x%llx\n",
+		args[0], args[1], args[2], res.a0, res.a1);
+	return n;
+}
+
+static int call_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "Last call: fid=0x%llx\n", last_call_fid);
+	seq_printf(m, "  a0 (return) = 0x%016llx\n", last_call_a0);
+	seq_printf(m, "  a1          = 0x%016llx\n", last_call_a1);
+	seq_printf(m, "  a2          = 0x%016llx\n", last_call_a2);
+	seq_printf(m, "  a3          = 0x%016llx\n", last_call_a3);
+	seq_puts(m, "\nWrite: \"<fid> [<a1>] [<a2>] [<a3>] [<a4>] [<a5>] [<a6>]\" all hex\n");
+	return 0;
+}
+
+static int call_open(struct inode *i, struct file *f)
+{
+	return single_open(f, call_show, NULL);
+}
+
+static const struct proc_ops call_ops = {
+	.proc_open = call_open, .proc_read = seq_read,
+	.proc_lseek = seq_lseek, .proc_release = single_release,
+	.proc_write = call_write,
+};
+
 static struct proc_dir_entry *probe_dir;
 
 static int __init rodin_smc_probe_init(void)
@@ -202,6 +256,7 @@ static int __init rodin_smc_probe_init(void)
 	proc_create("single", 0664, probe_dir, &single_ops);
 	proc_create("range",  0664, probe_dir, &range_ops);
 	proc_create("result", 0444, probe_dir, &result_ops);
+	proc_create("call",   0664, probe_dir, &call_ops);
 
 	pr_info("rodin_smc_probe: ready, max_results=%d\n", MAX_RESULTS);
 	return 0;
