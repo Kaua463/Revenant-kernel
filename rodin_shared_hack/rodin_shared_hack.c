@@ -50,6 +50,20 @@
  */
 #define HBVC_PA                  0x13F50000UL
 #define HBVC_SIZE                0x1000
+
+/* GPUEB SRAM region (DTS gpueb@13c00000 reg = <0x13c00000 0x50000>).
+ * This is where the GPUEB RV33 firmware code lives AFTER boot signature check.
+ * If AP can ioremap+read this region, live firmware patching is feasible:
+ *   - Identify offset of cmd 16 (CMD_FIX_DUAL_CUSTOM_FREQ_VOLT) handler's
+ *     AutoK gate branch (via RE of gpueb_a.img dump)
+ *   - Patch that branch with RV32 NOP (0x00000013) or unconditional jump
+ *   - GPUEB stops rejecting fix_custom_freq_volt → UV unlocks
+ *
+ * Risk: DEVAPC may block AP write to coprocessor's private SRAM. Read-only
+ * test first via /proc/rodin_shared_hack/sram_dump. If read works, write
+ * test via sram_write (small NOP patch first, monitor crash). */
+#define GPUEB_SRAM_PA            0x13C00000UL
+#define GPUEB_SRAM_SIZE          0x50000   /* 320KB per DTS reg property */
 #define HBVC_OFF_FLL0_FRONTEND   0x400  /* AP confirmed reads */
 #define HBVC_OFF_FLL1_FRONTEND   0x404
 #define HBVC_OFF_GRP0_BACKEND    0x480
@@ -86,6 +100,7 @@
 static void __iomem *shared_va;
 static void __iomem *cpulut_va;
 static void __iomem *hbvc_va;
+static void __iomem *sram_va;
 static u32 last_set_test_mode;
 
 static int snap_show(struct seq_file *m, void *v)
@@ -521,6 +536,101 @@ static const struct proc_ops hbvc_write_ops = {
 	.proc_write = hbvc_write,
 };
 
+/* /proc/rodin_shared_hack/sram_dump — read first N bytes of GPUEB SRAM.
+ * Format: read returns 256 bytes (64 u32) as hex from sram_va base.
+ * If read triggers DEVAPC panic, kernel will reboot and we know SRAM is
+ * protected for AP. If read succeeds, we have proof firmware code is
+ * AP-readable and can begin RE for AutoK gate offset. */
+static int sram_dump_show(struct seq_file *m, void *v)
+{
+	int i;
+	u32 val;
+	int total_nonzero = 0;
+
+	if (!sram_va) {
+		seq_puts(m, "sram_va = NULL (ioremap failed)\n");
+		return 0;
+	}
+
+	seq_printf(m, "GPUEB SRAM @ phys 0x%lx (size 0x%x)\n",
+		GPUEB_SRAM_PA, GPUEB_SRAM_SIZE);
+	seq_puts(m, "First 256 bytes (64 u32 little-endian):\n");
+	for (i = 0; i < 64; i++) {
+		val = readl(sram_va + i * 4);
+		if (i % 4 == 0)
+			seq_printf(m, "  +0x%04x:", i * 4);
+		seq_printf(m, " %08x", val);
+		if (val)
+			total_nonzero++;
+		if (i % 4 == 3)
+			seq_putc(m, '\n');
+	}
+	seq_printf(m, "non-zero in first 256: %d/64\n", total_nonzero);
+
+	/* Check magic at offset 0 — expected '88 16 88 58' (tinysys header) */
+	val = readl(sram_va);
+	seq_printf(m, "magic @ 0x0 = 0x%08x (expected 0x58881688 LE)\n", val);
+	if (val == 0x58881688)
+		seq_puts(m, "MAGIC MATCH! Firmware header readable from AP\n");
+
+	return 0;
+}
+
+static int sram_dump_open(struct inode *i, struct file *f)
+{
+	return single_open(f, sram_dump_show, NULL);
+}
+
+static const struct proc_ops sram_dump_ops = {
+	.proc_open = sram_dump_open, .proc_read = seq_read,
+	.proc_lseek = seq_lseek, .proc_release = single_release,
+};
+
+/* /proc/rodin_shared_hack/sram_peek — read u32 at arbitrary offset.
+ * Format: write "<hex_off>" then read returns value at that offset. */
+static u32 g_sram_peek_off;
+
+static ssize_t sram_peek_write(struct file *f, const char __user *ub,
+			       size_t n, loff_t *o)
+{
+	char buf[32];
+
+	if (!sram_va)
+		return -ENODEV;
+	if (!n || n >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ub, n))
+		return -EFAULT;
+	buf[n] = '\0';
+	if (kstrtouint(strim(buf), 0, &g_sram_peek_off))
+		return -EINVAL;
+	if (g_sram_peek_off >= GPUEB_SRAM_SIZE - 3 || (g_sram_peek_off & 3))
+		return -EINVAL;
+	return n;
+}
+
+static int sram_peek_show(struct seq_file *m, void *v)
+{
+	if (!sram_va) {
+		seq_puts(m, "ENODEV\n");
+		return 0;
+	}
+	seq_printf(m, "off=0x%05x: 0x%08x\n",
+		g_sram_peek_off, readl(sram_va + g_sram_peek_off));
+	return 0;
+}
+
+static int sram_peek_open(struct inode *i, struct file *f)
+{
+	return single_open(f, sram_peek_show, NULL);
+}
+
+static const struct proc_ops sram_peek_ops = {
+	.proc_open = sram_peek_open, .proc_read = seq_read,
+	.proc_lseek = seq_lseek, .proc_release = single_release,
+	.proc_write = sram_peek_write,
+};
+
 static struct proc_dir_entry *hack_dir;
 
 static int __init rodin_shared_hack_init(void)
@@ -569,6 +679,22 @@ static int __init rodin_shared_hack_init(void)
 		pr_warn("rodin_shared_hack: ioremap HBVC 0x%lx failed\n", HBVC_PA);
 	}
 
+	/* GPUEB SRAM (firmware code region) — Path A precondition test.
+	 * If ioremap succeeds AND sram_dump reads firmware magic 0x58881688
+	 * → AP can read GPUEB code → live firmware patching feasible.
+	 * If ioremap fails OR read triggers DEVAPC → fallback to Mali UAF.
+	 * Read-only on first pass; sram_write added separately after verify. */
+	sram_va = ioremap(GPUEB_SRAM_PA, GPUEB_SRAM_SIZE);
+	if (sram_va) {
+		proc_create("sram_dump", 0444, hack_dir, &sram_dump_ops);
+		proc_create("sram_peek", 0664, hack_dir, &sram_peek_ops);
+		pr_info("rodin_shared_hack: gpueb sram mapped phys 0x%lx (size 0x%x)\n",
+			GPUEB_SRAM_PA, GPUEB_SRAM_SIZE);
+	} else {
+		pr_warn("rodin_shared_hack: ioremap GPUEB SRAM 0x%lx failed (DEVAPC?)\n",
+			GPUEB_SRAM_PA);
+	}
+
 	pr_info("rodin_shared_hack: mapped phys 0x%lx (size 0x%x), test_mode read = %u\n",
 		GPUEB_SHARED_PA, GPUFREQ_SHARED_SIZE,
 		readl(shared_va + OFF_TEST_MODE));
@@ -589,6 +715,10 @@ static void __exit rodin_shared_hack_exit(void)
 	if (hbvc_va) {
 		iounmap(hbvc_va);
 		hbvc_va = NULL;
+	}
+	if (sram_va) {
+		iounmap(sram_va);
+		sram_va = NULL;
 	}
 }
 
