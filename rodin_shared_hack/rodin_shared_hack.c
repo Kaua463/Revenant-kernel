@@ -64,6 +64,21 @@
  * test via sram_write (small NOP patch first, monitor crash). */
 #define GPUEB_SRAM_PA            0x13C00000UL
 #define GPUEB_SRAM_SIZE          0x50000   /* 320KB per DTS reg property */
+
+/* GPUEB FULL reserved memory.
+ * gpueb_mem_addr=0x7F880000, gpueb_mem_size=0x180000 (1.5 MB) confirmed via
+ * DTS soc/gpueb@13c00000/gpueb_mem_{addr,size} and reserved-memory
+ * mblock-48-me_GPUEB_SHARED reg=<0x7F880000 0x180000>.
+ *
+ * Our original shared_va only mapped 0x4000 of this. The remaining 1.5 MB
+ * may contain GPUEB firmware code copy (BL2 loads gpueb_a partition here
+ * after signature verify). If tinysys magic 0x58881688 found anywhere in
+ * the [0x4000 - 0x180000) range = firmware code base located = live patch
+ * AutoK gate becomes feasible (signature check only at boot). */
+#define GPUEB_FULL_PA            0x7F880000UL
+#define GPUEB_FULL_SIZE          0x180000UL
+#define TINYSYS_MAGIC_LE         0x58881688U
+
 #define HBVC_OFF_FLL0_FRONTEND   0x400  /* AP confirmed reads */
 #define HBVC_OFF_FLL1_FRONTEND   0x404
 #define HBVC_OFF_GRP0_BACKEND    0x480
@@ -101,7 +116,10 @@ static void __iomem *shared_va;
 static void __iomem *cpulut_va;
 static void __iomem *hbvc_va;
 static void __iomem *sram_va;
+static void __iomem *gpueb_full_va;
 static u32 last_set_test_mode;
+static u32 g_full_peek_off;
+static u32 g_search_first_hit;
 
 static int snap_show(struct seq_file *m, void *v)
 {
@@ -631,6 +649,109 @@ static const struct proc_ops sram_peek_ops = {
 	.proc_write = sram_peek_write,
 };
 
+/* /proc/rodin_shared_hack/gpueb_search — scan full GPUEB reserved memory
+ * (1.5 MB starting at 0x7F880000) for tinysys magic 0x58881688 LE. Report
+ * first hit + count of total hits. If non-zero hits = firmware code copy
+ * lives in this region and is AP-readable. */
+static int gpueb_search_show(struct seq_file *m, void *v)
+{
+	u32 off, val, count = 0;
+	u32 first_hit = 0xFFFFFFFFu;
+
+	if (!gpueb_full_va) {
+		seq_puts(m, "gpueb_full_va = NULL (ioremap failed)\n");
+		return 0;
+	}
+
+	seq_printf(m, "Scanning [0x%lx .. 0x%lx) for magic 0x%08x LE...\n",
+		GPUEB_FULL_PA, GPUEB_FULL_PA + GPUEB_FULL_SIZE,
+		TINYSYS_MAGIC_LE);
+
+	for (off = 0; off < GPUEB_FULL_SIZE; off += 4) {
+		val = readl(gpueb_full_va + off);
+		if (val == TINYSYS_MAGIC_LE) {
+			if (first_hit == 0xFFFFFFFFu)
+				first_hit = off;
+			if (count < 20)
+				seq_printf(m, "  hit @ 0x%06x (phys 0x%lx)\n",
+					off, GPUEB_FULL_PA + off);
+			count++;
+		}
+	}
+
+	g_search_first_hit = first_hit;
+	seq_printf(m, "\ntotal hits: %u\nfirst_hit_off: 0x%06x\n",
+		count, first_hit);
+
+	if (count > 0 && first_hit != 0xFFFFFFFFu) {
+		/* Dump 64 bytes after first hit to confirm header */
+		seq_puts(m, "\n--- First 64 bytes after first hit ---\n");
+		for (off = 0; off < 16; off++) {
+			if (off % 4 == 0)
+				seq_printf(m, "  +0x%02x:", off * 4);
+			seq_printf(m, " %08x",
+				readl(gpueb_full_va + first_hit + off * 4));
+			if (off % 4 == 3)
+				seq_putc(m, '\n');
+		}
+	}
+	return 0;
+}
+
+static int gpueb_search_open(struct inode *i, struct file *f)
+{
+	return single_open(f, gpueb_search_show, NULL);
+}
+
+static const struct proc_ops gpueb_search_ops = {
+	.proc_open = gpueb_search_open, .proc_read = seq_read,
+	.proc_lseek = seq_lseek, .proc_release = single_release,
+};
+
+/* /proc/rodin_shared_hack/gpueb_peek — read u32 at arbitrary offset within
+ * the 1.5 MB GPUEB reserved memory region. Format: write "<hex_off>" then
+ * read returns value. */
+static ssize_t gpueb_peek_write(struct file *f, const char __user *ub,
+				size_t n, loff_t *o)
+{
+	char buf[32];
+
+	if (!gpueb_full_va)
+		return -ENODEV;
+	if (!n || n >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ub, n))
+		return -EFAULT;
+	buf[n] = '\0';
+	if (kstrtouint(strim(buf), 0, &g_full_peek_off))
+		return -EINVAL;
+	if (g_full_peek_off >= GPUEB_FULL_SIZE - 3 || (g_full_peek_off & 3))
+		return -EINVAL;
+	return n;
+}
+
+static int gpueb_peek_show(struct seq_file *m, void *v)
+{
+	if (!gpueb_full_va) {
+		seq_puts(m, "ENODEV\n");
+		return 0;
+	}
+	seq_printf(m, "off=0x%06x: 0x%08x\n",
+		g_full_peek_off, readl(gpueb_full_va + g_full_peek_off));
+	return 0;
+}
+
+static int gpueb_peek_open(struct inode *i, struct file *f)
+{
+	return single_open(f, gpueb_peek_show, NULL);
+}
+
+static const struct proc_ops gpueb_peek_ops = {
+	.proc_open = gpueb_peek_open, .proc_read = seq_read,
+	.proc_lseek = seq_lseek, .proc_release = single_release,
+	.proc_write = gpueb_peek_write,
+};
+
 static struct proc_dir_entry *hack_dir;
 
 static int __init rodin_shared_hack_init(void)
@@ -680,10 +801,9 @@ static int __init rodin_shared_hack_init(void)
 	}
 
 	/* GPUEB SRAM (firmware code region) — Path A precondition test.
-	 * If ioremap succeeds AND sram_dump reads firmware magic 0x58881688
-	 * → AP can read GPUEB code → live firmware patching feasible.
-	 * If ioremap fails OR read triggers DEVAPC → fallback to Mali UAF.
-	 * Read-only on first pass; sram_write added separately after verify. */
+	 * Initial test (v4): reads ALL ZERO. Either silent DEVAPC block or this
+	 * region is just register interface, not firmware code. Kept for
+	 * completeness; firmware actually lives in reserved memory below. */
 	sram_va = ioremap(GPUEB_SRAM_PA, GPUEB_SRAM_SIZE);
 	if (sram_va) {
 		proc_create("sram_dump", 0444, hack_dir, &sram_dump_ops);
@@ -693,6 +813,21 @@ static int __init rodin_shared_hack_init(void)
 	} else {
 		pr_warn("rodin_shared_hack: ioremap GPUEB SRAM 0x%lx failed (DEVAPC?)\n",
 			GPUEB_SRAM_PA);
+	}
+
+	/* GPUEB full reserved memory (1.5 MB at 0x7F880000).
+	 * Hunt for tinysys magic 0x58881688 LE — that's the firmware header
+	 * marker. If found, firmware code is AP-readable here = patch viable.
+	 * Use ioremap_wc (write-combine) — same access mode as shared_va. */
+	gpueb_full_va = ioremap_wc(GPUEB_FULL_PA, GPUEB_FULL_SIZE);
+	if (gpueb_full_va) {
+		proc_create("gpueb_search", 0444, hack_dir, &gpueb_search_ops);
+		proc_create("gpueb_peek",   0664, hack_dir, &gpueb_peek_ops);
+		pr_info("rodin_shared_hack: gpueb_full mapped phys 0x%lx (size 0x%lx)\n",
+			GPUEB_FULL_PA, GPUEB_FULL_SIZE);
+	} else {
+		pr_warn("rodin_shared_hack: ioremap_wc GPUEB_FULL 0x%lx failed\n",
+			GPUEB_FULL_PA);
 	}
 
 	pr_info("rodin_shared_hack: mapped phys 0x%lx (size 0x%x), test_mode read = %u\n",
@@ -719,6 +854,10 @@ static void __exit rodin_shared_hack_exit(void)
 	if (sram_va) {
 		iounmap(sram_va);
 		sram_va = NULL;
+	}
+	if (gpueb_full_va) {
+		iounmap(gpueb_full_va);
+		gpueb_full_va = NULL;
 	}
 }
 
