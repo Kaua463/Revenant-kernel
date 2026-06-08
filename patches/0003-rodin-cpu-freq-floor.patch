@@ -1,0 +1,114 @@
+From: Revenant <noreply@revenant.local>
+Subject: [PATCH] cpufreq: rodin thermal-guarded freq floor (CPU sustain)
+
+mi_thermald throttles freq_qos MAX to ~2.0GHz at 60C despite 30C headroom
+(measured Rtheta=9.7C/W). Floor the ceiling per-cluster (eff1.8/perf2.4/
+prime2.6 GHz) only below 85C, read lockless from an atomic updated by a 1s
+worker. On a 85C crossing the worker forces policy re-eval so the floor
+releases on heating regardless of mi_thermald. Guard 85C vs ~117C critical.
+---
+diff --git a/drivers/cpufreq/cpufreq.c b/drivers/cpufreq/cpufreq.c
+index 1df97ed..e5b3b30 100644
+--- a/drivers/cpufreq/cpufreq.c
++++ b/drivers/cpufreq/cpufreq.c
+@@ -30,6 +30,7 @@
+ #include <linux/syscore_ops.h>
+ #include <linux/tick.h>
+ #include <linux/units.h>
++#include <linux/thermal.h>
+ #include <trace/events/power.h>
+ #include <trace/hooks/cpufreq.h>
+ 
+@@ -2595,6 +2596,59 @@ int cpufreq_get_policy(struct cpufreq_policy *policy, unsigned int cpu)
+ }
+ EXPORT_SYMBOL(cpufreq_get_policy);
+ 
++/*
++ * RODIN thermal-guarded freq floor.
++ *
++ * A worker polls the SoC sensor every second and caches the temperature in an
++ * atomic. cpufreq_set_policy() reads that atomic LOCKLESS, so it never calls
++ * into the thermal framework while holding cpufreq locks => no lock inversion,
++ * no deadlock. The floor only applies below RODIN_GUARD_MC; at/above it (or
++ * before the first poll, when temp==0) the floor is skipped and HyperOS
++ * mi_thermald throttles normally, so critical-thermal protection is preserved
++ * with a large margin (guard 85C vs ~117C hardware critical).
++ */
++#define RODIN_GUARD_MC	85000	/* skip floor at/above 85.0 C */
++static atomic_t rodin_soc_mC = ATOMIC_INIT(0);
++static struct thermal_zone_device *rodin_tz;
++static void rodin_temp_poll(struct work_struct *w);
++static DECLARE_DELAYED_WORK(rodin_temp_dwork, rodin_temp_poll);
++
++static void rodin_temp_poll(struct work_struct *w)
++{
++	static int prev_above = -1;
++	int t = 0, above;
++
++	if (!rodin_tz)
++		rodin_tz = thermal_zone_get_zone_by_name("soc_max");
++	if (!IS_ERR_OR_NULL(rodin_tz) &&
++	    thermal_zone_get_temp(rodin_tz, &t) == 0 && t > 0)
++		atomic_set(&rodin_soc_mC, t);
++
++	/*
++	 * On a guard crossing, force policies to re-evaluate so the floor
++	 * engages/releases even if mi_thermald stops poking freq_qos. This is
++	 * the safety net: when temp rises past 85C the floor is dropped here,
++	 * not only when something else happens to call cpufreq_set_policy().
++	 */
++	above = atomic_read(&rodin_soc_mC) >= RODIN_GUARD_MC;
++	if (above != prev_above) {
++		unsigned int cpu;
++
++		prev_above = above;
++		for_each_online_cpu(cpu)
++			cpufreq_update_policy(cpu);
++	}
++	schedule_delayed_work(&rodin_temp_dwork, HZ);
++}
++
++static int __init rodin_temp_init(void)
++{
++	/* start polling 15s after boot so thermal zones are registered */
++	schedule_delayed_work(&rodin_temp_dwork, 15 * HZ);
++	return 0;
++}
++late_initcall(rodin_temp_init);
++
+ /**
+  * cpufreq_set_policy - Modify cpufreq policy parameters.
+  * @policy: Policy object to modify.
+@@ -2628,6 +2682,32 @@ static int cpufreq_set_policy(struct cpufreq_policy *policy,
+ 	new_data.min = freq_qos_read_value(&policy->constraints, FREQ_QOS_MIN);
+ 	new_data.max = freq_qos_read_value(&policy->constraints, FREQ_QOS_MAX);
+ 
++	/*
++	 * RODIN sustain: stop mi_thermald from throttling the ceiling below a
++	 * per-cluster floor, but ONLY while the SoC is below RODIN_GUARD_MC.
++	 * At/above the guard (or temp unknown == 0) the floor is skipped so the
++	 * normal throttle path can cool the chip => never reaches critical.
++	 * Floors stay under cpuinfo.max_freq. Read is lockless (atomic).
++	 */
++	{
++		int soc = atomic_read(&rodin_soc_mC);
++		unsigned int rodin_floor = 0;
++
++		if (soc > 0 && soc < RODIN_GUARD_MC) {
++			if (new_data.cpu <= 3)
++				rodin_floor = 1800000;	/* eff   */
++			else if (new_data.cpu <= 6)
++				rodin_floor = 2400000;	/* perf  */
++			else
++				rodin_floor = 2600000;	/* prime */
++
++			if (rodin_floor > new_data.cpuinfo.max_freq)
++				rodin_floor = new_data.cpuinfo.max_freq;
++			if (new_data.max < rodin_floor)
++				new_data.max = rodin_floor;
++		}
++	}
++
+ 	pr_debug("setting new policy for CPU %u: %u - %u kHz\n",
+ 		 new_data.cpu, new_data.min, new_data.max);
+ 
