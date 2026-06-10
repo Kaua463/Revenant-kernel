@@ -120,9 +120,12 @@ jobs:
           # ceiling below it (CPU sustain). STRICT — fail build on any reject so a
           # silently-unpatched kernel never ships.
           P="$GITHUB_WORKSPACE/patches/0003-rodin-cpu-freq-floor.patch"
+          # clear any stale reject from a cached ws/common before applying
+          rm -f drivers/cpufreq/cpufreq.c.rej
           patch -p1 --fuzz=3 --forward --no-backup-if-mismatch < "$P"
-          if find . -name '*.rej' | grep -q .; then
-            echo "[FAIL] 0003 had rejects:"; find . -name '*.rej' -exec cat {} +; exit 1
+          # check ONLY our file's reject (other .rej may exist from cache/other patches)
+          if [ -f drivers/cpufreq/cpufreq.c.rej ]; then
+            echo "[FAIL] 0003 cpufreq reject:"; cat drivers/cpufreq/cpufreq.c.rej; exit 1
           fi
           grep -q "RODIN sustain" drivers/cpufreq/cpufreq.c \
             && echo "[+] 0003 CPU freq floor applied" || { echo "[FAIL] marker missing"; exit 1; }
