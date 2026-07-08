@@ -1,0 +1,13 @@
+load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
+
+# Generic SMC caller probe, used to dynamically test ATF/BL31 SMC handlers
+# (MTK_SIP_* family, e.g. MTK_SIP_APUSYS_CONTROL) discovered via static
+# analysis of atf.bin, without needing a dedicated module per FID.
+ddk_module(
+    name = "rodin_smc",
+    srcs = ["rodin_smc.c"],
+    out = "rodin_smc.ko",
+    hdrs = ["//common:all_headers"],
+    kernel_build = "//common:kernel_aarch64",
+    visibility = ["//visibility:public"],
+)
