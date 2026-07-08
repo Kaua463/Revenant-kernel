@@ -150,7 +150,7 @@ static ssize_t send_write(struct file *f, const char __user *ubuf,
 	g_last_msg = msg;
 
 	pr_info("rodin_gpueb: send channel=\"%s\" pin_id=%d cmd_id=0x%x w2..w7=[%x %x %x %x %x %x] ipi_ret=%d\n",
-		name, pin, vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], ret);
+		name, pin, vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], ret);
 
 	return count;
 }
