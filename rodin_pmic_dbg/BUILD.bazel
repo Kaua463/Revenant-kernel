@@ -1,0 +1,20 @@
+load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
+
+# MediaTek's own SPMI PMIC debug driver (mtk-spmi-pmic-debug.c, unmodified from
+# MTK_kernel_device_modules_6.6/drivers/mfd/), rebuilt as a standalone module.
+# This driver ships in MTK's source tree but was excluded from the production
+# vendor_dlkm build. The devicetree already has matching "mediatek,spmi-pmic-debug"
+# nodes on both PMICs (mt6363@pmic@4, mt6368@second_pmic@5), so probe attaches
+# automatically on insmod -- no devicetree changes needed. Exposes a "pmic_access"
+# sysfs RW file for raw SPMI register read/write (addr [val] in hex), using the
+# regmap already registered by the mtk-spmi-pmic core driver (mtk_spmi_pmic.ko,
+# already loaded in production). No custom vendor symbols needed -- only GKI-common
+# regmap/platform_driver APIs, so this should link cleanly.
+ddk_module(
+    name = "rodin_pmic_dbg",
+    srcs = ["rodin_pmic_dbg.c"],
+    out = "rodin_pmic_dbg.ko",
+    hdrs = ["//common:all_headers"],
+    kernel_build = "//common:kernel_aarch64",
+    visibility = ["//visibility:public"],
+)

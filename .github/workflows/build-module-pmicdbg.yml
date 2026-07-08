@@ -1,0 +1,78 @@
+name: Build rodin_pmic_dbg module (fast)
+
+on:
+  push:
+    paths:
+      - 'rodin_pmic_dbg/**'
+      - '.github/workflows/build-module-pmicdbg.yml'
+  workflow_dispatch:
+
+env:
+  KMI_TAG: android15-6.6.127_r00
+
+jobs:
+  module:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute kernel cache key
+        run: |
+          H=$(cat .github/workflows/build-kernel.yml \
+                  configs/*.fragment \
+                  rodin/* \
+                  patches/* 2>/dev/null | sha256sum | cut -c1-16)
+          KEY="kernel-${KMI_TAG}-${H}"
+          echo "CACHE_KEY=$KEY" >> "$GITHUB_ENV"
+          echo "[+] cache key = $KEY"
+
+      - name: Restore bazel cache + ws tree
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/bazel
+            ws
+          key: ${{ env.CACHE_KEY }}
+
+      - name: Guard — cache must be present
+        run: |
+          if [ "${{ steps.restore.outputs.cache-hit }}" != "true" ]; then
+            echo "[FAIL] cache miss para key=${CACHE_KEY}."
+            exit 1
+          fi
+          test -x ws/tools/bazel || { echo "[FAIL] ws/tools/bazel ausente"; exit 1; }
+          echo "[+] cache restaurado, ws/ presente"
+
+      - name: Build rodin_pmic_dbg.ko (kernel já em cache)
+        run: |
+          cd ws
+          mkdir -p common/rodin_pmic_dbg
+          cp "$GITHUB_WORKSPACE/rodin_pmic_dbg/rodin_pmic_dbg.c" common/rodin_pmic_dbg/
+          cp "$GITHUB_WORKSPACE/rodin_pmic_dbg/BUILD.bazel"  common/rodin_pmic_dbg/
+          tools/bazel build --lto=thin --page_size=4k \
+            --defconfig_fragment=//common:arch/arm64/configs/revenant.fragment \
+            //common/rodin_pmic_dbg:rodin_pmic_dbg
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          KO=$(find -L bazel-bin -name rodin_pmic_dbg.ko | head -1)
+          test -n "$KO"
+          cp -v "$KO" "$GITHUB_WORKSPACE/dist/rodin_pmic_dbg.ko"
+
+      - name: Gates (vermagic + GOT)
+        run: |
+          KO="$GITHUB_WORKSPACE/dist/rodin_pmic_dbg.ko"
+          echo "=== info ==="
+          strings "$KO" | grep -iE "vermagic|^name=|^depends=" | head
+          echo "=== GOT reloc gate ==="
+          if readelf -r "$KO" 2>/dev/null | grep -iE "GOT"; then
+            echo "[FAIL] GOT relocations presentes"
+            exit 1
+          fi
+          echo "[+] sem GOT — loader-compativel"
+
+      - name: Upload rodin_pmic_dbg.ko
+        uses: actions/upload-artifact@v4
+        with:
+          name: rodin_pmic_dbg-ko-${{ github.run_number }}
+          path: dist/rodin_pmic_dbg.ko
+          retention-days: 30
