@@ -1,0 +1,88 @@
+name: Build rodin_gpueb module (fast)
+
+# Workflow B (mesmo padrao de build-module.yml/rodin_eem): itera o rodin_gpueb.ko
+# SEM rebuildar o kernel. Restaura o cache (bazel + ws/) que build-kernel.yml
+# salvou e builda so o modulo (~1min). Dispara em push que toca rodin_gpueb/**
+# ou este arquivo.
+on:
+  push:
+    paths:
+      - 'rodin_gpueb/**'
+      - '.github/workflows/build-module-gpueb.yml'
+  workflow_dispatch:
+
+env:
+  # Tem que bater com build-kernel.yml (mesmo KMI_TAG => mesma chave de cache).
+  KMI_TAG: android15-6.6.127_r00
+
+jobs:
+  module:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute kernel cache key
+        run: |
+          H=$(cat .github/workflows/build-kernel.yml \
+                  configs/*.fragment \
+                  rodin/* \
+                  patches/* 2>/dev/null | sha256sum | cut -c1-16)
+          KEY="kernel-${KMI_TAG}-${H}"
+          echo "CACHE_KEY=$KEY" >> "$GITHUB_ENV"
+          echo "[+] cache key = $KEY"
+
+      - name: Restore bazel cache + ws tree
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/bazel
+            ws
+          key: ${{ env.CACHE_KEY }}
+
+      - name: Guard — cache must be present
+        run: |
+          if [ "${{ steps.restore.outputs.cache-hit }}" != "true" ]; then
+            echo "[FAIL] cache miss para key=${CACHE_KEY}."
+            echo "       Rode a workflow A (Build Revenant Kernel) nesta branch primeiro"
+            echo "       pra popular o cache, depois re-push o modulo."
+            exit 1
+          fi
+          test -x ws/tools/bazel || { echo "[FAIL] ws/tools/bazel ausente — cache corrompido"; exit 1; }
+          echo "[+] cache restaurado, ws/ presente"
+
+      - name: Build rodin_gpueb.ko (kernel já em cache)
+        run: |
+          cd ws
+          mkdir -p common/rodin_gpueb
+          cp "$GITHUB_WORKSPACE/rodin_gpueb/rodin_gpueb.c" common/rodin_gpueb/
+          cp "$GITHUB_WORKSPACE/rodin_gpueb/BUILD.bazel"  common/rodin_gpueb/
+          tools/bazel build --lto=thin --page_size=4k \
+            --defconfig_fragment=//common:arch/arm64/configs/revenant.fragment \
+            //common/rodin_gpueb:rodin_gpueb
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          KO=$(find -L bazel-bin -name rodin_gpueb.ko | head -1)
+          test -n "$KO"
+          cp -v "$KO" "$GITHUB_WORKSPACE/dist/rodin_gpueb.ko"
+
+      - name: Gates (vermagic + GOT + undefined syms)
+        run: |
+          KO="$GITHUB_WORKSPACE/dist/rodin_gpueb.ko"
+          echo "=== info ==="
+          strings "$KO" | grep -iE "vermagic|^name=|^depends=|rodin_gpueb ready" | head
+          echo "=== GOT reloc gate (loader rejeita R_AARCH64_*_GOT_*) ==="
+          if readelf -r "$KO" 2>/dev/null | grep -iE "GOT"; then
+            echo "[FAIL] GOT relocations presentes — insmod rejeitaria"
+            exit 1
+          fi
+          echo "[+] sem GOT — loader-compatível"
+          echo "=== undefined vendor syms (weak UND, resolvem no insmod) ==="
+          readelf -sW "$KO" 2>/dev/null \
+            | grep -iE "gpueb_get_send_PIN_ID_by_name|mtk_ipi_send_compl_to_gpueb"
+
+      - name: Upload rodin_gpueb.ko
+        uses: actions/upload-artifact@v4
+        with:
+          name: rodin_gpueb-ko-${{ github.run_number }}
+          path: dist/rodin_gpueb.ko
+          retention-days: 30

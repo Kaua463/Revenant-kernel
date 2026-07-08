@@ -1,0 +1,15 @@
+load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
+
+# GPUEB IPI probe module, built against the Revenant GKI kernel (KMI-matched
+# vermagic android15-8-4k). hdrs=//common:all_headers gives the module the kernel
+# header set. Vendor symbols (mtk_gpueb) are strong externs, called directly
+# (never address-taken, see rodin_gpueb.c) so no GOT relocation is emitted;
+# resolved at insmod, CRC mismatch handled by the load-anyway patch.
+ddk_module(
+    name = "rodin_gpueb",
+    srcs = ["rodin_gpueb.c"],
+    out = "rodin_gpueb.ko",
+    hdrs = ["//common:all_headers"],
+    kernel_build = "//common:kernel_aarch64",
+    visibility = ["//visibility:public"],
+)
