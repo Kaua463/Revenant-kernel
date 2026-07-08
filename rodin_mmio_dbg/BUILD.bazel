@@ -1,0 +1,14 @@
+load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
+
+# Raw physical MMIO/SRAM read-write probe (ioremap + readl/writel), used to
+# investigate the GPUEB live OPP table SRAM address (0x13c264d8, documented
+# in a prior session) as an alternative to the constantly-recalculated
+# VOSEL PMIC register, which loses the race under real GPU load.
+ddk_module(
+    name = "rodin_mmio_dbg",
+    srcs = ["rodin_mmio_dbg.c"],
+    out = "rodin_mmio_dbg.ko",
+    hdrs = ["//common:all_headers"],
+    kernel_build = "//common:kernel_aarch64",
+    visibility = ["//visibility:public"],
+)
