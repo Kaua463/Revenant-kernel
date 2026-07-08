@@ -64,6 +64,18 @@ static ssize_t read_write(struct file *f, const char __user *ubuf,
 	if (!tok || kstrtou32(tok, 16, &size))
 		return -EINVAL;
 
+	/* alignment fault on readl/readw is fatal in EL1 (no recovery path
+	 * here) -- a prior test crashed the kernel this way. Reject anything
+	 * not naturally aligned instead of trusting the caller. */
+	if ((size != 1 && size != 2 && size != 4) ||
+	    (size == 2 && (addr & 0x1)) ||
+	    (size == 4 && (addr & 0x3))) {
+		pr_err("rodin_mmio: rejected unaligned/invalid read addr=0x%llx size=%u\n",
+		       addr, size);
+		g_last_ret = -EINVAL;
+		return count;
+	}
+
 	base = ioremap(addr, 4);
 	if (!base) {
 		pr_err("rodin_mmio: ioremap(0x%llx) failed\n", addr);
@@ -118,6 +130,12 @@ static ssize_t write_write(struct file *f, const char __user *ubuf,
 	tok = strsep(&p, " \t\n");
 	if (!tok || kstrtou32(tok, 16, &val))
 		return -EINVAL;
+
+	if (addr & 0x3) {
+		pr_err("rodin_mmio: rejected unaligned write addr=0x%llx\n", addr);
+		g_last_ret = -EINVAL;
+		return count;
+	}
 
 	base = ioremap(addr, 4);
 	if (!base) {
