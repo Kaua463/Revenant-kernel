@@ -1,0 +1,13 @@
+load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
+
+# Safe, disposable one-page test target (known pattern, kernel-owned memory)
+# used to probe EL3 SMC write handlers (MTK_SIP_APUSYS_CONTROL CE_REG_WRITE)
+# before ever pointing such a call at real hardware/firmware memory.
+ddk_module(
+    name = "rodin_testmem",
+    srcs = ["rodin_testmem.c"],
+    out = "rodin_testmem.ko",
+    hdrs = ["//common:all_headers"],
+    kernel_build = "//common:kernel_aarch64",
+    visibility = ["//visibility:public"],
+)
