@@ -18,17 +18,17 @@
 #include <linux/string.h>
 #include <linux/arm-smccc.h>
 
-static unsigned long g_last_args[6];
+static unsigned long g_last_args[8];
 static struct arm_smccc_res g_last_res;
 static int g_last_valid;
 
 static int smc_show(struct seq_file *m, void *v)
 {
-	seq_puts(m, "write: \"<a0> <a1> <a2> <a3> <a4> <a5>\" (all hex, no 0x prefix)\n");
+	seq_puts(m, "write: \"<a0> <a1> <a2> <a3> <a4> <a5> <a6> <a7>\" (all hex, no 0x prefix)\n");
 	if (g_last_valid) {
-		seq_printf(m, "last call: a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx a4=0x%lx a5=0x%lx\n",
-			   g_last_args[0], g_last_args[1], g_last_args[2],
-			   g_last_args[3], g_last_args[4], g_last_args[5]);
+		seq_printf(m, "last call: a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx a4=0x%lx a5=0x%lx a6=0x%lx a7=0x%lx\n",
+			   g_last_args[0], g_last_args[1], g_last_args[2], g_last_args[3],
+			   g_last_args[4], g_last_args[5], g_last_args[6], g_last_args[7]);
 		seq_printf(m, "result: a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx\n",
 			   g_last_res.a0, g_last_res.a1, g_last_res.a2, g_last_res.a3);
 	} else {
@@ -40,8 +40,8 @@ static int smc_show(struct seq_file *m, void *v)
 static ssize_t smc_write(struct file *f, const char __user *ubuf,
 			  size_t count, loff_t *pos)
 {
-	char buf[160], *p, *tok;
-	unsigned long args[6] = {0};
+	char buf[220], *p, *tok;
+	unsigned long args[8] = {0};
 	int i;
 
 	if (count == 0 || count >= sizeof(buf))
@@ -51,7 +51,7 @@ static ssize_t smc_write(struct file *f, const char __user *ubuf,
 	buf[count] = '\0';
 	p = buf;
 
-	for (i = 0; i < 6; i++) {
+	for (i = 0; i < 8; i++) {
 		tok = strsep(&p, " \t\n");
 		if (!tok || !*tok)
 			return -EINVAL;
@@ -59,13 +59,13 @@ static ssize_t smc_write(struct file *f, const char __user *ubuf,
 			return -EINVAL;
 	}
 
-	arm_smccc_smc(args[0], args[1], args[2], args[3], args[4], args[5], 0, 0, &g_last_res);
+	arm_smccc_smc(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], &g_last_res);
 
 	memcpy(g_last_args, args, sizeof(args));
 	g_last_valid = 1;
 
-	pr_info("rodin_smc: call a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx a4=0x%lx a5=0x%lx -> res a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx\n",
-		args[0], args[1], args[2], args[3], args[4], args[5],
+	pr_info("rodin_smc: call a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx a4=0x%lx a5=0x%lx a6=0x%lx a7=0x%lx -> res a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx\n",
+		args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7],
 		g_last_res.a0, g_last_res.a1, g_last_res.a2, g_last_res.a3);
 
 	return count;
