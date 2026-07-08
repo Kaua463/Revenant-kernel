@@ -143,7 +143,11 @@ static ssize_t send_write(struct file *f, const char __user *ubuf,
 	for (i = 0; i < 7; i++)
 		msg.word[1 + i] = vals[i];
 
-	ret = mtk_ipi_send_compl_to_gpueb(pin, 0, &msg, sizeof(msg), GPUEB_IPI_TIMEOUT_MS);
+	/* size is in 4-byte MBOX slots (same convention as mtk_ipi_send_compl,
+	 * confirmed in rodin_eem.c: sizeof(struct)/MBOX_SLOT_SIZE), not raw bytes.
+	 * First attempt used sizeof(msg)=32 raw bytes and got an immediate
+	 * ret=-5 (no timeout wait) — consistent with a size-validation reject. */
+	ret = mtk_ipi_send_compl_to_gpueb(pin, 0, &msg, sizeof(msg) / 4, GPUEB_IPI_TIMEOUT_MS);
 
 	g_last_pin = pin;
 	g_last_ret = ret;
