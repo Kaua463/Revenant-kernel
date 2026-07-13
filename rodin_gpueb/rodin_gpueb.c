@@ -54,6 +54,41 @@ struct gpueb_msg {
 	unsigned int word[8];
 };
 
+/* Per-channel message word-count, copied verbatim from the live devicetree
+ * send-table at gpueb@13c00000 (mtk_ipi_send_compl rejects with ret=-5,
+ * immediately, no timeout, if the size arg doesn't match the channel's
+ * registered slot count -- confirmed on-device sending fixed 8 words to
+ * IPI_ID_CCF, which is registered for 4). Unlisted channels fall back to 8
+ * (the old fixed behavior) with a dmesg warning so a mismatch is visible
+ * instead of silently eating a -5. */
+struct gpueb_chan_size { const char *name; int words; };
+static const struct gpueb_chan_size gpueb_chan_sizes[] = {
+	{ "IPI_ID_FAST_DVFS_EVENT", 4 },
+	{ "IPI_ID_GPUFREQ",         8 },
+	{ "IPI_ID_SLEEP",           3 },
+	{ "IPI_ID_TIMER",           6 },
+	{ "IPI_ID_FHCTL",           9 },
+	{ "IPI_ID_CCF",             4 },
+	{ "IPI_ID_GPUMPU",          6 },
+	{ "IPI_ID_FAST_DVFS",       6 },
+	{ "CH_IPIR_C_MET",          1 },
+	{ "CH_IPIS_C_MET",          4 },
+	{ "IPI_ID_BRISKET",         3 },
+};
+
+static int gpueb_chan_word_count(const char *name)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(gpueb_chan_sizes); i++) {
+		if (!strcmp(name, gpueb_chan_sizes[i].name))
+			return gpueb_chan_sizes[i].words;
+	}
+	pr_warn("rodin_gpueb: channel \"%s\" not in the known size table, defaulting to 8 words\n",
+		name);
+	return 8;
+}
+
 /* ---- /proc/rodin_gpueb/resolve (RW): write a channel name, read back pin_id ---- */
 static int g_last_resolved_pin = -2; /* -2 = never resolved */
 static char g_last_resolved_name[32];
@@ -144,10 +179,12 @@ static ssize_t send_write(struct file *f, const char __user *ubuf,
 		msg.word[1 + i] = vals[i];
 
 	/* size is in 4-byte MBOX slots (same convention as mtk_ipi_send_compl,
-	 * confirmed in rodin_eem.c: sizeof(struct)/MBOX_SLOT_SIZE), not raw bytes.
-	 * First attempt used sizeof(msg)=32 raw bytes and got an immediate
-	 * ret=-5 (no timeout wait) — consistent with a size-validation reject. */
-	ret = mtk_ipi_send_compl_to_gpueb(pin, 0, &msg, sizeof(msg) / 4, GPUEB_IPI_TIMEOUT_MS);
+	 * confirmed in rodin_eem.c: sizeof(struct)/MBOX_SLOT_SIZE), not raw bytes,
+	 * AND it must match the channel's own registered slot count exactly (not
+	 * just be <= sizeof(msg)) -- confirmed on-device: fixed 8 words against
+	 * IPI_ID_CCF (registered for 4) gave an immediate ret=-5, no timeout wait.
+	 * Look up the real per-channel word count instead of assuming 8. */
+	ret = mtk_ipi_send_compl_to_gpueb(pin, 0, &msg, gpueb_chan_word_count(name), GPUEB_IPI_TIMEOUT_MS);
 
 	g_last_pin = pin;
 	g_last_ret = ret;
