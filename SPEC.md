@@ -38,9 +38,9 @@ V10 | Repository validation runs with the Ruby/Psych version shipped by macOS an
 | ID | Task | Status |
 |---|---|---|
 | T1 | Record ROM evidence, constraints, and safety invariants | done |
-| T2 | Align workflow to 6.6.77 and add strict compatibility gates | active |
-| T3 | Correct KernelSU/rollback documentation and artifact naming | todo |
-| T4 | Run local static validation; commit and push isolated branch | todo |
+| T2 | Align workflow to 6.6.77 and add strict compatibility gates | done |
+| T3 | Correct KernelSU/rollback documentation and artifact naming | done |
+| T4 | Run local static validation; commit and push isolated branch | active |
 | T5 | Dispatch GitHub Actions and follow build through completion | todo |
 | T6 | Inspect produced kernel/artifacts and report flash/rollback guidance | todo |
 
