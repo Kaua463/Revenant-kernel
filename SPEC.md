@@ -25,12 +25,13 @@ I4 | GitHub Actions artifact → user-downloadable flashable package plus raw `I
 V1 | Build source tag is exactly `android15-6.6.77_r00`.
 V2 | Built `Image` release starts with `6.6.77-android15-8` and ends in `-4k`; workflow fails otherwise.
 V3 | Installer target remains `boot`, uses slot autodetection, and handles header-v4/empty-ramdisk layout through `split_boot` + `flash_boot`.
-V4 | Matched-ROM build must not unconditionally accept CRC or vermagic mismatches.
+V4 | Preserve the proven Wi-Fi/Bluetooth KMI, protected-symbol, CRC, and vermagic compatibility patches; strict source-marker gates must prove every intended patch applied.
 V5 | KernelSU-Next commit, derived version code/name, manager signer identity, and SuSFS commit are logged and validated.
 V6 | Any unexpected SuSFS or KernelSU patch rejection fails the build.
 V7 | Every bundled AnyKernel executable is AArch64 and its source archive is checksum-pinned.
 V8 | No workflow event flashes a device; release creation defaults off.
 V9 | Rollback documentation identifies the exact 3.0.304 `boot.img`; the repository's older 6.6.89 `stock_boot.img` is not presented as a 3.0.304 rollback image.
+V10 | Repository validation runs with the Ruby/Psych version shipped by macOS and checks workflow constants plus shell patch markers.
 
 ## §T
 
@@ -48,5 +49,6 @@ V9 | Rollback documentation identifies the exact 3.0.304 `boot.img`; the reposit
 | ID | Bug | Cause | Prevent recurrence |
 |---|---|---|---|
 | B1 | Existing workflow builds 6.6.127 for a ROM shipping 6.6.77 | Base selected from a different kernel package | V1-V2 pin and verify the ROM-matched release |
-| B2 | Existing workflow masks CRC/vermagic failures globally | Version mismatch was treated as a loader-policy problem | V4 prohibits unconditional mismatch acceptance |
+| B2 | Wi-Fi/Bluetooth failed in earlier builds | Rodin vendor modules hit protected-symbol and CRC/vermagic gates | V4 preserves the proven compatibility patches and verifies their application |
 | B3 | Existing README treats a 6.6.89 boot as universal stock recovery | Rollback image provenance was not tied to ROM version | V9 requires exact ROM-version identity |
+| B4 | 2026-09-07 local YAML check failed before parsing | macOS Ruby 2.6/Psych does not support `aliases:` on `YAML.load_file` | V10 uses a compatible validator script |

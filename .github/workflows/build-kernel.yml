@@ -22,7 +22,9 @@ on:
 
 env:
   KMI_BRANCH: common-android15-6.6
-  KMI_TAG: android15-6.6.127_r00
+  # DyperOS 3.0.304 boot.img: 6.6.77-android15-8-gca30f3b4bef6-abogki440974771-4k
+  KMI_TAG: android15-6.6.77_r00
+  EXPECTED_KERNEL_RELEASE: 6.6.77-android15-8
   KSU_OWNER: KernelSU-Next
   KSU_REPO: KernelSU-Next
   # commit hash do KSU-Next "source: sync with upstream" (13/Mai/2026)
@@ -43,7 +45,9 @@ env:
   # antes desse breakage. Testado local: aplica clean em KSU 1d919700, 0 rejects.
   SUSFS_COMMIT: ca1016d7d94f9570d800c50eb30d12fbdcc7d7ac
   SUSFS_HOST: github.com
-  KSU_VERSION_FORCED: 33150
+  # 30000 + `git rev-list --count` at KSU_COMMIT (3151 commits).
+  KSU_VERSION_FORCED: 33151
+  KSU_VERSION_TAG: v3.2.0-22-g1d919700
 
 jobs:
   build:
@@ -202,6 +206,11 @@ jobs:
           cd KernelSU-Next
           git checkout ${{ env.KSU_COMMIT }}
           echo "[+] KSU at $(git rev-parse --short HEAD): $(git log -1 --pretty=%s)"
+          COUNT=$(git rev-list --count HEAD)
+          DESCRIBE=$(git describe --tags --always)
+          test "$((30000 + COUNT))" = "${{ env.KSU_VERSION_FORCED }}"
+          test "$DESCRIBE" = "${{ env.KSU_VERSION_TAG }}"
+          echo "[+] KSU manager/source identity: $DESCRIBE (${{ env.KSU_VERSION_FORCED }})"
 
       - name: Clone ${{ env.SUSFS_OWNER }}/${{ env.SUSFS_REPO }} at pinned commit
         run: |
@@ -263,8 +272,8 @@ jobs:
           cd ws/common
           # Auditor claim 3: EVONIX binary tem "load anyway" + "loading anyway" strings,
           # Revenant nao. Confirma EVONIX tem patch que downgrada module load ERROR → WARN.
-          # Esse patch é o que permite EVONIX (6.6.127) carregar rodin vendor_dlkm modules
-          # (6.6.89) apesar de CRC mismatch. MODULE_FORCE_LOAD=y sozinho nao basta porque
+          # Esse patch comprovadamente restaurou Wi-Fi/BT ao carregar os módulos vendor_dlkm
+          # de rodin apesar de CRC mismatch. MODULE_FORCE_LOAD=y sozinho nao basta porque
           # Android init nao passa --force flag pra modprobe.
           #
           # Patch:
@@ -296,6 +305,8 @@ jobs:
           grep -A1 "disagrees about version" kernel/module/version.c | head -4
           echo "===check main.c==="
           grep -B1 -A2 "version magic" kernel/module/main.c | head -10
+          grep -q "v1.3 force load" kernel/module/version.c || { echo "[FAIL] CRC compatibility patch missing"; exit 1; }
+          grep -q "v1.3 load anyway" kernel/module/main.c || { echo "[FAIL] vermagic compatibility patch missing"; exit 1; }
           echo "[+] Module loader patched: vendor modules loadable apesar de CRC/vermagic mismatch"
 
       - name: Override Kbuild hardcoded values (KSU_VERSION fallback + Manager hash)
@@ -303,14 +314,14 @@ jobs:
           cd ws/KernelSU-Next
           # Patch cctv18 hardcoded KSU_VERSION=16 fallback (sandbox loses .git) + weishu manager hash
           # Trocar pelos valores corretos:
-          #   KSU_VERSION = 33150 (passa manager check 33110)
+          #   KSU_VERSION = 33151 (derivado do histórico do commit pinado)
           #   EXPECTED_HASH = 79e590113c... (KSU-Next oficial — kwlkkw manager bate)
           #   EXPECTED_SIZE = 0x3e6 (KSU-Next manager APK size)
           sed -i 's|ccflags-y += -DKSU_VERSION=16|ccflags-y += -DKSU_VERSION=${{ env.KSU_VERSION_FORCED }}|' kernel/Kbuild
           sed -i 's|KSU_EXPECTED_HASH := c371061b19d8c7d7d6133c6a9bafe198fa944e50c1b31c9d8daa8d7f1fc2d2d6|KSU_EXPECTED_HASH := 79e590113c4c4c0c222978e413a5faa801666957b1212a328e46c00c69821bf7|' kernel/Kbuild
           sed -i 's|KSU_EXPECTED_SIZE := 0x033b|KSU_EXPECTED_SIZE := 0x3e6|' kernel/Kbuild
           # cctv18 patch removeu KSU_VERSION_TAG — mas supercall/dispatch.c usa essa macro. Define manualmente:
-          echo 'ccflags-y += -DKSU_VERSION_TAG=\"v3.2.0\"' >> kernel/Kbuild
+          echo 'ccflags-y += -DKSU_VERSION_TAG=\"${{ env.KSU_VERSION_TAG }}\"' >> kernel/Kbuild
           # Verificar
           echo "[+] KSU_VERSION fallback:"
           grep -n "KSU_VERSION=" kernel/Kbuild
@@ -353,7 +364,7 @@ jobs:
           # via file_localversion e `--page_size=4k` injeta `-4k` via config_localversion
           # do arm64_4k_defconfig fragment. Setar CONFIG_LOCALVERSION aqui SOBRESCREVE
           # o -4k (fragment ordem: nosso → último → vence merge_config).
-          # Resultado esperado: 6.6.127-android15-8-4k (igual EVONIX sem prefix branding)
+          # Resultado esperado: 6.6.77-android15-8-4k (igual à base da DyperOS 3.0.304)
           cat ws/common/arch/arm64/configs/revenant.fragment
 
       - name: Build kernel_aarch64 (thin LTO + page_size=4k)
@@ -370,7 +381,12 @@ jobs:
           test -n "$IMG"
           cp -v "$IMG" "$GITHUB_WORKSPACE/dist/Image"
           echo "=== banner ==="
-          strings "$GITHUB_WORKSPACE/dist/Image" | grep "^Linux version" | head -1
+          BANNER=$(strings "$GITHUB_WORKSPACE/dist/Image" | grep "^Linux version" | head -1)
+          echo "$BANNER"
+          echo "$BANNER" | grep -q "${{ env.EXPECTED_KERNEL_RELEASE }}.*-4k" || {
+            echo "[FAIL] kernel release does not match DyperOS 3.0.304"
+            exit 1
+          }
           echo "=== KSU + SuSFS strings ==="
           strings "$GITHUB_WORKSPACE/dist/Image" | grep -E "KSU_VERSION|SUSFS_VERSION|susfs is initialized" | head -3
 
@@ -414,6 +430,7 @@ jobs:
           AK3_AARCH64_URL="https://github.com/NEESCHAL-3/EVONIX-kernel/releases/download/v2.0/EVONIX-v2.0-RODIN.zip"
           curl -fSL "$AK3_AARCH64_URL" -o /tmp/ak3-src.zip
           [ -s /tmp/ak3-src.zip ] || { echo "[FAIL] EVONIX zip download failed/empty"; exit 1; }
+          echo "12215bb52d68d6daaf408de6dcc5623ab5e5ca7483342a70b3302598616f9a23  /tmp/ak3-src.zip" | sha256sum -c -
           mkdir -p /tmp/ak3-src && unzip -oq /tmp/ak3-src.zip -d /tmp/ak3-src
           for t in busybox fec httools_static lptools_static magiskboot magiskpolicy snapshotupdater_static; do
             [ -f "/tmp/ak3-src/tools/$t" ] || { echo "[FAIL] EVONIX zip missing tools/$t"; exit 1; }
@@ -426,9 +443,9 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE/ak3"
           cat > anykernel.sh <<'EOF'
-          ### AnyKernel3 — Revenant v1.4.1
+          ### AnyKernel3 — Revenant DyperOS 3.0.304
           properties() { '
-          kernel.string=Revenant Kernel v1.4.1 by Kaua
+          kernel.string=Revenant Kernel for DyperOS 3.0.304 by Kaua
           do.devicecheck=0
           do.modules=0
           do.systemless=1
@@ -476,9 +493,9 @@ jobs:
       - name: Zip AnyKernel3 (flashable)
         run: |
           cd "$GITHUB_WORKSPACE/ak3"
-          zip -r9 "../Revenant-Beta-v1.4.1-${{ github.run_number }}.zip" * -x .git
+          zip -r9 "../Revenant-DyperOS-3.0.304-${{ github.run_number }}.zip" * -x .git
           cd ..
-          ls -lh Revenant-Beta-*.zip
+          ls -lh Revenant-DyperOS-*.zip
 
       - name: Upload AnyKernel (flashable direto — sem zip-dentro-de-zip)
         uses: actions/upload-artifact@v4
@@ -488,14 +505,14 @@ jobs:
           # Revenant-Beta.zip CONTENDO os arquivos (zip sobre zip). Solucao: mandar
           # os arquivos SOLTOS do ak3/. O LCA e "ak3" -> stripped -> arquivos na raiz
           # do artifact zip => o proprio download JA E o AnyKernel flashavel.
-          name: Revenant-v1.5-${{ github.run_number }}-flashable
+          name: Revenant-DyperOS-3.0.304-${{ github.run_number }}-flashable
           path: ak3/*
           retention-days: 30
 
       - name: Upload Image raw (debug only)
         uses: actions/upload-artifact@v4
         with:
-          name: Revenant-Image-v1.4.1-${{ github.run_number }}-debug
+          name: Revenant-Image-DyperOS-3.0.304-${{ github.run_number }}-debug
           path: dist/Image
           retention-days: 7
 
@@ -503,11 +520,11 @@ jobs:
         if: ${{ inputs.release == true }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: Beta-v1.4.1
-          name: Revenant Beta v1.4.1
+          tag_name: DyperOS-3.0.304-${{ github.run_number }}
+          name: Revenant for DyperOS 3.0.304
           body: |
             Build #${{ github.run_number }}
-            Base: Linux 6.6.127 `android15-8-4k`
+            Base: Linux 6.6.77 `android15-8-4k`
             KernelSU-Next + SuSFS v2.1.0 (cctv18/susfs4oki)
 
             Fixes vs v1.4:
@@ -523,5 +540,5 @@ jobs:
             - `--page_size=4k`, `android/abi_gki_protected_exports_*` empty
             - AnyKernel `block=boot` + conditional split_boot/flash_boot
             - KSU-Next 1d919700 + cctv18 SuSFS pinned ca1016d7d
-          files: Revenant-Beta-*.zip
+          files: Revenant-DyperOS-*.zip
           prerelease: true
