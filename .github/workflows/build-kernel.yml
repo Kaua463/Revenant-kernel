@@ -27,27 +27,11 @@ env:
   EXPECTED_KERNEL_RELEASE: 6.6.77-android15-8
   KSU_OWNER: KernelSU-Next
   KSU_REPO: KernelSU-Next
-  # commit hash do KSU-Next "source: sync with upstream" (13/Mai/2026)
-  # Kbuild hash fd31bb51 bate com base do patch cctv18 10_enable_susfs_for_ksu.patch
-  KSU_COMMIT: 1d919700e46568436b993b57d3a8e3a3fd7f27b6
-  # v1.3: revert simonpunk → cctv18 (simonpunk patches rejected em KSU-Next 1d919700,
-  # gerou ksu_lsm_hook_init undeclared no build). cctv18 fork foi feito PRA KSU-Next.
-  # Os "hooks extras invasivos" do cctv18 (sdcard_monitor etc) NAO sao causa do bootloop —
-  # causa real é module loader sem patch "load anyway" (claim 3 da auditoria, confirmado
-  # via strings binarias EVONIX vs Revenant). Fix: aplicar patch no module loader em
-  # step dedicado (proxima sessao).
-  SUSFS_OWNER: cctv18
-  SUSFS_REPO: susfs4oki
-  SUSFS_BRANCH: oki-android15-6.6
-  # v1.4: pin commit — cctv18 force-pushed 766a7f2 ("Sync with official KernelSU main repo")
-  # que rebaseou patches pra tiann/KernelSU upstream (incompativel com nosso
-  # KernelSU-Next pinned 1d919700...). ca1016d e o ultimo commit estavel
-  # antes desse breakage. Testado local: aplica clean em KSU 1d919700, 0 rejects.
-  SUSFS_COMMIT: ca1016d7d94f9570d800c50eb30d12fbdcc7d7ac
-  SUSFS_HOST: github.com
+  # Official KernelSU Next v3.3.0 release.
+  KSU_COMMIT: 3b18216f71df189ab3d1b1ce0bdb21be1268e771
   # 30000 + `git rev-list --count` at KSU_COMMIT (3151 commits).
-  KSU_VERSION_FORCED: 33151
-  KSU_VERSION_TAG: v3.2.0-22-g1d919700
+  KSU_VERSION_FORCED: 33214
+  KSU_VERSION_TAG: v3.3.0
 
 jobs:
   build:
@@ -59,7 +43,7 @@ jobs:
         run: |
           # Chave do cache do kernel. DEVE ser idêntica à da workflow B (build-module.yml).
           # Hash sobre TUDO que muda o binário do kernel (NÃO inclui rodin_eem/ — é o que
-          # B itera). Os commits pinados (KSU/SuSFS) e o KMI_TAG vivem neste arquivo, então
+          # B itera). O commit pinado do KSU e o KMI_TAG vivem neste arquivo, então
           # hashear build-kernel.yml já os cobre.
           H=$(cat .github/workflows/build-kernel.yml \
                   configs/*.fragment \
@@ -212,61 +196,6 @@ jobs:
           test "$DESCRIBE" = "${{ env.KSU_VERSION_TAG }}"
           echo "[+] KSU manager/source identity: $DESCRIBE (${{ env.KSU_VERSION_FORCED }})"
 
-      - name: Clone ${{ env.SUSFS_OWNER }}/${{ env.SUSFS_REPO }} at pinned commit
-        run: |
-          cd ws
-          # v1.4: clone full (no --depth=1) + checkout pinned SUSFS_COMMIT
-          # garante reproducibilidade. cctv18 force-push 766a7f2 quebrou KSU patch.
-          git clone -b ${{ env.SUSFS_BRANCH }} \
-            https://${{ env.SUSFS_HOST }}/${{ env.SUSFS_OWNER }}/${{ env.SUSFS_REPO }}.git susfs
-          cd susfs
-          git checkout ${{ env.SUSFS_COMMIT }}
-          echo "[+] cctv18 at $(git rev-parse --short HEAD): $(git log -1 --pretty=%s)"
-          cd ..
-          ls susfs/kernel_patches/
-
-      - name: Copy SuSFS source files BEFORE patch
-        run: |
-          cd ws/common
-          cp -v ../susfs/kernel_patches/fs/susfs.c fs/
-          cp -v ../susfs/kernel_patches/include/linux/susfs.h include/linux/
-          cp -v ../susfs/kernel_patches/include/linux/susfs_def.h include/linux/
-          echo "[+] SuSFS source files copied"
-
-      - name: Apply cctv18 SuSFS kernel patch to common/ (FAIL on .rej except known)
-        run: |
-          cd ws/common
-          # 2 hunks expected to fail (cctv18 patch targets older kernel):
-          # 1. fs/proc/task_mmu.c — SUS_MAP feature (we disable it anyway)
-          # 2. mm/rmap.c — huge_pmd_unshare signature changed in 6.6.x; cctv18
-          #    over-reach not needed for SuSFS core. v1.0/v1.1 built+booted with this.
-          patch -p1 --fuzz=3 --forward --no-backup-if-mismatch \
-            < ../susfs/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
-          # Allowlist: task_mmu.c.rej, rmap.c.rej
-          REJ=$(find . -name "*.rej" | grep -vE "task_mmu\.c\.rej$|rmap\.c\.rej$" || true)
-          if [ -n "$REJ" ]; then
-            echo "[FAIL] Unexpected .rej files:"
-            echo "$REJ"
-            for f in $REJ; do echo "=== $f ==="; cat "$f"; done
-            exit 1
-          fi
-          echo "[+] SuSFS kernel patch applied (only known rejects)"
-          find . -name "*.rej" | xargs -I{} echo "  allowed: {}"
-
-      - name: Apply cctv18 KSU patch to KSU source (STRICT — fail on any .rej)
-        run: |
-          cd ws/KernelSU-Next
-          patch -p1 --fuzz=3 --forward --no-backup-if-mismatch \
-            < ../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
-          # Auditor claim 5: NEVER tolerate KSU patch failures — gera undefined symbols
-          if find . -name "*.rej" -print -quit | grep -q .; then
-            echo "[FAIL] KSU patch had rejects:"
-            find . -name "*.rej" -exec sh -c 'echo "=== $1 ==="; cat "$1"' _ {} \;
-            exit 1
-          fi
-          echo "[+] KSU SuSFS patch applied clean"
-          grep -q "^config KSU_SUSFS$" kernel/Kconfig || { echo "[FAIL] CONFIG_KSU_SUSFS missing"; exit 1; }
-
       - name: Patch module loader (load_anyway on CRC/vermagic mismatch) — v1.3 ROOT FIX
         run: |
           cd ws/common
@@ -309,27 +238,6 @@ jobs:
           grep -q "v1.3 load anyway" kernel/module/main.c || { echo "[FAIL] vermagic compatibility patch missing"; exit 1; }
           echo "[+] Module loader patched: vendor modules loadable apesar de CRC/vermagic mismatch"
 
-      - name: Override Kbuild hardcoded values (KSU_VERSION fallback + Manager hash)
-        run: |
-          cd ws/KernelSU-Next
-          # Patch cctv18 hardcoded KSU_VERSION=16 fallback (sandbox loses .git) + weishu manager hash
-          # Trocar pelos valores corretos:
-          #   KSU_VERSION = 33151 (derivado do histórico do commit pinado)
-          #   EXPECTED_HASH = 79e590113c... (KSU-Next oficial — kwlkkw manager bate)
-          #   EXPECTED_SIZE = 0x3e6 (KSU-Next manager APK size)
-          sed -i 's|ccflags-y += -DKSU_VERSION=16|ccflags-y += -DKSU_VERSION=${{ env.KSU_VERSION_FORCED }}|' kernel/Kbuild
-          sed -i 's|KSU_EXPECTED_HASH := c371061b19d8c7d7d6133c6a9bafe198fa944e50c1b31c9d8daa8d7f1fc2d2d6|KSU_EXPECTED_HASH := 79e590113c4c4c0c222978e413a5faa801666957b1212a328e46c00c69821bf7|' kernel/Kbuild
-          sed -i 's|KSU_EXPECTED_SIZE := 0x033b|KSU_EXPECTED_SIZE := 0x3e6|' kernel/Kbuild
-          # cctv18 patch removeu KSU_VERSION_TAG — mas supercall/dispatch.c usa essa macro. Define manualmente:
-          echo 'ccflags-y += -DKSU_VERSION_TAG=\"${{ env.KSU_VERSION_TAG }}\"' >> kernel/Kbuild
-          # Verificar
-          echo "[+] KSU_VERSION fallback:"
-          grep -n "KSU_VERSION=" kernel/Kbuild
-          echo "[+] KSU_EXPECTED_HASH:"
-          grep -n "KSU_EXPECTED_HASH :=" kernel/Kbuild
-          echo "[+] KSU_EXPECTED_SIZE:"
-          grep -n "KSU_EXPECTED_SIZE :=" kernel/Kbuild
-
       - name: Symlink KernelSU-Next into common/drivers
         run: |
           cd ws/common
@@ -340,25 +248,9 @@ jobs:
             sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           echo "[+] KSU integrated"
 
-      - name: Integrate Revenant /proc/rodin driver (v1.5)
-        run: |
-          cd ws/common
-          # v1.5: driver kernel-owned de controle de modos (interface-only v0,
-          # no-op no boot => nao bootloopa). Source mora no repo em rodin/.
-          mkdir -p drivers/rodin
-          cp "$GITHUB_WORKSPACE/rodin/rodin.c"   drivers/rodin/
-          cp "$GITHUB_WORKSPACE/rodin/Kconfig"   drivers/rodin/
-          cp "$GITHUB_WORKSPACE/rodin/Makefile"  drivers/rodin/
-          grep -q 'drivers/rodin/Kconfig' drivers/Kconfig || \
-            sed -i '/endmenu/i\source "drivers/rodin/Kconfig"' drivers/Kconfig
-          grep -q 'rodin/' drivers/Makefile || \
-            printf '\nobj-$(CONFIG_RODIN) += rodin/\n' >> drivers/Makefile
-          echo "[+] rodin driver integrated"
-          grep -n 'rodin' drivers/Makefile drivers/Kconfig
-
       - name: Apply config fragment (no LOCALVERSION — kleaf handles -4k)
         run: |
-          cp configs/revenant-base.fragment \
+          cp configs/dyperos-stock-ksun.fragment \
             ws/common/arch/arm64/configs/revenant.fragment
           # v1.1: NÃO setamos CONFIG_LOCALVERSION aqui — kleaf injeta `-android15-8`
           # via file_localversion e `--page_size=4k` injeta `-4k` via config_localversion
@@ -387,8 +279,8 @@ jobs:
             echo "[FAIL] kernel release does not match DyperOS 3.0.304"
             exit 1
           }
-          echo "=== KSU + SuSFS strings ==="
-          strings "$GITHUB_WORKSPACE/dist/Image" | grep -E "KSU_VERSION|SUSFS_VERSION|susfs is initialized" | head -3
+          echo "=== KSU strings ==="
+          strings "$GITHUB_WORKSPACE/dist/Image" | grep -E "KernelSU|KSU_VERSION" | head -5
 
       # ===== módulo rodin_eem.ko NÃO é buildado aqui (vai pra workflow B) =====
       # A só prepara o kernel + cache. B (build-module.yml) restaura este cache e
@@ -525,7 +417,7 @@ jobs:
           body: |
             Build #${{ github.run_number }}
             Base: Linux 6.6.77 `android15-8-4k`
-            KernelSU-Next + SuSFS v2.1.0 (cctv18/susfs4oki)
+            KernelSU-Next v3.3.0 (33214), sem SuSFS ou tweaks Revenant
 
             Fixes vs v1.4:
             - **AnyKernel3 tools/ substituidas por aarch64** (eram 32-bit ARM EABI5).
@@ -539,6 +431,6 @@ jobs:
             - `kernel/module/{version,main}.c` patches — CRC + vermagic bypass
             - `--page_size=4k`, `android/abi_gki_protected_exports_*` empty
             - AnyKernel `block=boot` + conditional split_boot/flash_boot
-            - KSU-Next 1d919700 + cctv18 SuSFS pinned ca1016d7d
+            - KSU-Next oficial v3.3.0 pinado em 3b18216f
           files: Revenant-DyperOS-*.zip
           prerelease: true

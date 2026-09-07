@@ -1,0 +1,5 @@
+# DyperOS 3.0.304 stock-like GKI + KernelSU Next only.
+CONFIG_KSU=y
+
+# Allows recovery tools to unload a module when explicitly requested.
+CONFIG_MODULE_FORCE_LOAD=y

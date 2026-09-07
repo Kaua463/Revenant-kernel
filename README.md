@@ -9,16 +9,10 @@
 
 ## Changelog Beta-v1.0
 - AOSP `common-android15-6.6` pinned at `android15-6.6.77_r00`, matching the DyperOS 3.0.304 boot image
-- KernelSU-Next `v3.2.0-22-g1d919700` (33151) integrated
-- SuSFS v2.1.0 with SUS_PATH, SUS_MOUNT, SUS_KSTAT, SPOOF_UNAME, SPOOF_CMDLINE
-- Kyber I/O scheduler as default
-- ZSWAP with LZ4 compression
-- ZRAM with lzo-rle and writeback
-- Multi-gen LRU enabled at boot
-- PSI always on
-- BBR TCP congestion control
-- CRC32 hardware acceleration
-- Built with PGO + BOLT + LTO + MLGO
+- KernelSU-Next official v3.3.0 (33214) integrated
+- Stock-like GKI configuration: no SuSFS, `/proc/rodin`, scheduler, memory, filesystem, or network performance tweaks
+- Rodin vendor-module compatibility retained for Wi-Fi/Bluetooth
+- Built with Thin LTO and 4 KiB pages
 
 ## Coming next
 - **Beta-v1.1** — CAKE qdisc, TLS-in-kernel, BPF JIT, F2FS compression, autogroup scheduler, CFS bandwidth, RT group sched, io_uring
@@ -39,7 +33,7 @@ No custom recovery needed for rodin (none exists). Flash from your phone:
 
 ## KernelSU Next manager compatibility
 
-The integrated kernel source is version 33151. Use the official KernelSU Next v3.2.0 manager (33129), or another manager that explicitly supports kernel 33151. The v3.3.0 manager requires kernel 33188 or newer and is therefore not compatible with this SuSFS-integrated build. Updating the kernel-side code to v3.3.0 is intentionally blocked until a matching SuSFS patch applies cleanly.
+The integrated kernel and official manager are KernelSU Next v3.3.0 (33214). SuSFS is deliberately excluded from this stock-like build.
 
 ## Rollback
 
