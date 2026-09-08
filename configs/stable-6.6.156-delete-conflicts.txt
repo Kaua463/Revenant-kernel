@@ -1,0 +1,2 @@
+Documentation/devicetree/bindings/auxdisplay/holtek,ht16k33.yaml
+Documentation/devicetree/bindings/connector/usb-connector.yaml

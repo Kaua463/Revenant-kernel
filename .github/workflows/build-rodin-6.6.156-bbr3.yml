@@ -8,6 +8,8 @@ on:
       - .github/workflows/build-rodin-6.6.156-bbr3.yml
       - configs/rodin-source.lock
       - configs/bbr-v3.commits
+      - configs/ack-6.6.142-delete-conflicts.txt
+      - configs/stable-6.6.156-delete-conflicts.txt
       - configs/rodin-ksun-bbr3.fragment
       - scripts/port-rodin-6.6.156.sh
       - scripts/validate-source-lock.sh

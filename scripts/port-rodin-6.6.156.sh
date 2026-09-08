@@ -15,6 +15,7 @@ git config user.email 'actions@users.noreply.github.com'
 git merge --no-ff --no-commit -X theirs "$ANDROID_LTS_COMMIT" || true
 test -f .git/MERGE_HEAD
 git diff --name-only --diff-filter=U | sort > "$repo_root/ack-unmerged.txt"
+diff -u "$repo_root/configs/ack-6.6.142-delete-conflicts.txt" "$repo_root/ack-unmerged.txt"
 git add -A
 git restore --source="$RODIN_CLEAN_COMMIT" --staged --worktree drivers/clk/Makefile
 test -z "$(git diff --name-only --diff-filter=U)"
@@ -25,7 +26,11 @@ git commit -m "Merge Android 15 ACK LTS through 6.6.142"
 git merge --no-ff --no-commit -X ours "$LINUX_STABLE_COMMIT" || true
 test -f .git/MERGE_HEAD
 git diff --name-only --diff-filter=U | sort > "$repo_root/stable-unmerged.txt"
-test ! -s "$repo_root/stable-unmerged.txt"
+diff -u "$repo_root/configs/stable-6.6.156-delete-conflicts.txt" "$repo_root/stable-unmerged.txt"
+while IFS= read -r path; do
+    git rm -- "$path"
+done < "$repo_root/configs/stable-6.6.156-delete-conflicts.txt"
+test -z "$(git diff --name-only --diff-filter=U)"
 git commit -m "Merge Linux stable through 6.6.156"
 
 test "$(sed -n 's/^VERSION = //p' Makefile)" = 6
