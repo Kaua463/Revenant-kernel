@@ -1,2 +1,6 @@
-Documentation/devicetree/bindings/auxdisplay/holtek,ht16k33.yaml
-Documentation/devicetree/bindings/connector/usb-connector.yaml
+Documentation/devicetree/bindings/crypto/qcom,inline-crypto-engine.yaml
+Documentation/devicetree/bindings/media/allwinner,sun4i-a10-video-engine.yaml
+Documentation/devicetree/bindings/net/renesas,ether.yaml
+Documentation/devicetree/bindings/pinctrl/nvidia,tegra234-pinmux-aon.yaml
+Documentation/devicetree/bindings/pinctrl/nvidia,tegra234-pinmux.yaml
+Documentation/devicetree/bindings/regulator/mt6359-regulator.yaml
