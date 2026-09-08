@@ -10,5 +10,6 @@ kernel/bpf/verifier.c
 kernel/trace/trace.c
 kernel/trace/trace.h
 kernel/trace/trace_events_hist.c
+kernel/trace/trace_output.c
 lib/seq_buf.c
 scripts/ssl-common.h
