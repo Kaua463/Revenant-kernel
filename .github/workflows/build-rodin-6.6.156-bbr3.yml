@@ -52,7 +52,8 @@ jobs:
             "$ANDROID_LTS_BRANCH:refs/remotes/ack/$ANDROID_LTS_BRANCH"
           test "$(git -C source rev-parse refs/remotes/ack/$ANDROID_LTS_BRANCH)" = "$ANDROID_LTS_COMMIT"
           git -C source remote add stable "$LINUX_STABLE_URL"
-          git -C source fetch --no-tags stable "tag $LINUX_STABLE_TAG"
+          git -C source fetch --no-tags stable \
+            "refs/tags/$LINUX_STABLE_TAG:refs/tags/$LINUX_STABLE_TAG"
           test "$(git -C source rev-parse "$LINUX_STABLE_TAG^{commit}")" = "$LINUX_STABLE_COMMIT"
           git -C source remote add google-bbr "$BBR_SOURCE_URL"
           git -C source fetch --filter=blob:none --no-tags google-bbr \
@@ -131,5 +132,5 @@ jobs:
         with:
           name: rodin-6.6.156-ksun-bbr3-${{ github.run_number }}
           path: dist
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
