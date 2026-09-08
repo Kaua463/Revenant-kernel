@@ -3,7 +3,8 @@ RODIN_SOURCE_URL=https://gitlab.com/DevUknown/kernel-xiaomi-rodin-rebased-with-l
 RODIN_SOURCE_BRANCH=rodin-gpu
 RODIN_SOURCE_COMMIT=25920d57fb543470803749031b506c0d23d341d7
 RODIN_SOURCE_VERSION=6.6.102
-RODIN_CLEAN_COMMIT=3c8161cf48a7946fd9c0e8f91aad0d361310afec
+# Preserve the complete upstream rodin-gpu baseline, including its existing mods.
+RODIN_CLEAN_COMMIT=25920d57fb543470803749031b506c0d23d341d7
 
 ANDROID_LTS_URL=https://android.googlesource.com/kernel/common
 ANDROID_LTS_BRANCH=android15-6.6-lts
