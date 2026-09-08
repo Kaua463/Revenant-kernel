@@ -48,7 +48,7 @@ V14 | Hardware gate proves boot completion plus Wi-Fi, Bluetooth, GPU, audio, ca
 | T5 | Dispatch GitHub Actions and follow build through completion | done |
 | T6 | Inspect produced kernel/artifacts and report flash/rollback guidance | done |
 | T7 | Import and provenance-pin complete rodin/MT6899 source and build inputs | x |
-| T8 | Establish reproducible baseline build for kernel + all device modules | . |
+| T8 | Establish reproducible baseline build for kernel + all device modules | ~ |
 | T9 | Incrementally port Android 15 kernel to Linux 6.6.156 LTS | . |
 | T10 | Integrate pinned KernelSU Next and BBR/fq-only fragment | . |
 | T11 | Build safe installer, complete rollback package, and offline validation gates | . |

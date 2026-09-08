@@ -4,6 +4,9 @@ RODIN_SOURCE_BRANCH=rodin-gpu
 RODIN_SOURCE_COMMIT=25920d57fb543470803749031b506c0d23d341d7
 RODIN_SOURCE_VERSION=6.6.102
 
+CLANG_SOURCE_URL=https://gitlab.com/jjpprrrr/prelude-clang.git
+CLANG_COMMIT=ac8fce34dc0f6918672100d7a6e867a66b8afa8f
+
 LINUX_STABLE_URL=https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
 LINUX_STABLE_TAG=v6.6.156
 LINUX_STABLE_COMMIT=8b73de7da85fde281a385e0b26eda9bffd3ca477

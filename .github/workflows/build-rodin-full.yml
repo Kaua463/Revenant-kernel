@@ -1,0 +1,136 @@
+name: Build full rodin MT6899 kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Build stage
+        required: true
+        default: baseline
+        type: choice
+        options:
+          - baseline
+  push:
+    branches:
+      - dyperos-3.0.304
+    paths:
+      - .github/workflows/build-rodin-full.yml
+      - configs/rodin-source.lock
+      - scripts/validate-source-lock.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rodin-full-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate immutable inputs
+        run: scripts/validate-source-lock.sh
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates curl flex git jq \
+            libelf-dev libssl-dev lz4 pahole python3 rsync unzip xz-utils zip zstd
+
+      - name: Load source lock
+        run: |
+          set -a
+          . configs/rodin-source.lock
+          set +a
+          {
+            echo "RODIN_SOURCE_URL=$RODIN_SOURCE_URL"
+            echo "RODIN_SOURCE_COMMIT=$RODIN_SOURCE_COMMIT"
+            echo "RODIN_SOURCE_VERSION=$RODIN_SOURCE_VERSION"
+            echo "CLANG_SOURCE_URL=$CLANG_SOURCE_URL"
+            echo "CLANG_COMMIT=$CLANG_COMMIT"
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch pinned full rodin source archive
+        run: |
+          mkdir -p source
+          archive_url="https://gitlab.com/api/v4/projects/73710219/repository/archive.tar.gz?sha=$RODIN_SOURCE_COMMIT"
+          curl --fail --location --retry 5 --output rodin-source.tar.gz "$archive_url"
+          tar -xzf rodin-source.tar.gz --strip-components=1 -C source
+          test "$(sed -n 's/^VERSION = //p' source/Makefile)" = 6
+          test "$(sed -n 's/^PATCHLEVEL = //p' source/Makefile)" = 6
+          test "$(sed -n 's/^SUBLEVEL = //p' source/Makefile)" = 102
+          test -f source/arch/arm64/configs/rodin_defconfig
+          test -f source/mediatek/mt6899/mgk.enabled
+          test -d source/mediatek/drivers
+
+      - name: Fetch pinned Clang toolchain
+        run: |
+          git clone --filter=blob:none "$CLANG_SOURCE_URL" toolchains/clang-19
+          git -C toolchains/clang-19 checkout --detach "$CLANG_COMMIT"
+          test "$(git -C toolchains/clang-19 rev-parse HEAD)" = "$CLANG_COMMIT"
+          toolchains/clang-19/bin/clang --version | tee clang-version.txt
+
+      - name: Configure rodin baseline
+        run: |
+          export PATH="$GITHUB_WORKSPACE/toolchains/clang-19/bin:$PATH"
+          make -C source O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 rodin_defconfig
+          test "$(source/scripts/config --file out/.config -s ARM64_4K_PAGES)" = y
+          test "$(source/scripts/config --file out/.config -s MODULES)" = y
+          test "$(source/scripts/config --file out/.config -s MODVERSIONS)" = y
+
+      - name: Build kernel, DTs and all configured modules
+        run: |
+          export PATH="$GITHUB_WORKSPACE/toolchains/clang-19/bin:$PATH"
+          make -C source -j2 O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 Image Image.gz modules dtbs
+
+      - name: Install and inventory modules
+        run: |
+          export PATH="$GITHUB_WORKSPACE/toolchains/clang-19/bin:$PATH"
+          make -C source O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            INSTALL_MOD_PATH="$GITHUB_WORKSPACE/modules-root" modules_install
+          find modules-root -type l -delete
+          find modules-root -type f -name '*.ko' -print | sort > module-files.txt
+          test -s module-files.txt
+          wc -l module-files.txt
+
+      - name: Validate baseline outputs
+        run: |
+          test -s out/arch/arm64/boot/Image
+          test -s out/Module.symvers
+          test -s out/modules.order
+          file out/arch/arm64/boot/Image
+          strings out/arch/arm64/boot/Image | grep -m1 '^Linux version' | tee kernel-banner.txt
+          grep -q '6.6.102' kernel-banner.txt
+          if grep -R -n -E 'load anyway|force load|v1\.3 force|KMI bypass' source/kernel/module; then
+            echo 'Forbidden module compatibility bypass detected'
+            exit 1
+          fi
+
+      - name: Assemble baseline evidence
+        if: always()
+        run: |
+          mkdir -p dist
+          cp -f out/.config dist/config 2>/dev/null || true
+          cp -f out/Module.symvers dist/ 2>/dev/null || true
+          cp -f out/modules.order dist/ 2>/dev/null || true
+          cp -f out/arch/arm64/boot/Image dist/ 2>/dev/null || true
+          cp -f out/arch/arm64/boot/Image.gz dist/ 2>/dev/null || true
+          cp -f clang-version.txt kernel-banner.txt module-files.txt dist/ 2>/dev/null || true
+          if [ -d modules-root ]; then
+            tar -C modules-root -I 'zstd -19 -T0' -cf dist/modules.tar.zst .
+          fi
+          find dist -type f -exec sha256sum {} + | sort -k2 > dist/SHA256SUMS
+
+      - name: Upload baseline artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rodin-full-baseline-${{ github.run_number }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
