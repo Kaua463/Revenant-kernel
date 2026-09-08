@@ -1,6 +1,14 @@
 certs/extract-cert.c
+certs/Makefile
+include/linux/bpf_verifier.h
+include/linux/ftrace.h
 include/linux/seq_buf.h
+include/linux/trace.h
+include/linux/trace_events.h
+include/linux/trace_seq.h
 kernel/bpf/verifier.c
 kernel/trace/trace.c
+kernel/trace/trace.h
 kernel/trace/trace_events_hist.c
 lib/seq_buf.c
+scripts/ssl-common.h
