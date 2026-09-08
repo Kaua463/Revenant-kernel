@@ -82,7 +82,7 @@ jobs:
           make -C source O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 rodin_defconfig
           source/scripts/kconfig/merge_config.sh -m -O out out/.config configs/rodin-ksun-bbr3.fragment
           make -C source O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
-          for symbol in KSU NET_SCHED NET_SCH_FQ DEFAULT_FQ TCP_CONG_BBR DEFAULT_BBR; do
+          for symbol in KSU NET_SCHED NET_SCH_FQ NET_SCH_DEFAULT DEFAULT_FQ TCP_CONG_BBR DEFAULT_BBR; do
             test "$(source/scripts/config --file out/.config -s "$symbol")" = y
           done
           test "$(source/scripts/config --file out/.config -s TCP_CONG_BBR1)" = m
@@ -108,7 +108,8 @@ jobs:
           test -s out/arch/arm64/boot/Image
           strings out/arch/arm64/boot/Image | grep -m1 '^Linux version' | tee kernel-banner.txt
           grep -q '6.6.156' kernel-banner.txt
-          grep -q 'tcp_bbr_init' out/Module.symvers
+          test -s out/net/ipv4/tcp_bbr.o
+          llvm-nm out/net/ipv4/tcp_bbr.o | grep -q ' bbr_register$'
           test -f modules-root/lib/modules/*/kernel/net/ipv4/tcp_bbr1.ko
           if grep -R -n -E 'load anyway|force load|KMI bypass' source/kernel/module; then exit 1; fi
 
