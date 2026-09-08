@@ -92,6 +92,7 @@ jobs:
 
       - name: Build kernel, DTs and all configured modules
         run: |
+          set -o pipefail
           export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
           make -C source -j2 O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             Image Image.gz modules dtbs 2>&1 | tee build.log
