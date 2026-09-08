@@ -91,11 +91,11 @@ jobs:
           grep -qx 'CONFIG_DEFAULT_NET_SCH="fq"' out/.config
           grep -qx 'CONFIG_DEFAULT_TCP_CONG="bbr"' out/.config
 
-      - name: Build kernel, DTs and all configured modules
+      - name: Diagnostic compile sweep (collect all independent failures)
         run: |
           set -o pipefail
           export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
-          make -C source -j2 O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+          make -C source -k -j2 O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             Image Image.gz modules dtbs 2>&1 | tee build.log
 
       - name: Install and validate modules
