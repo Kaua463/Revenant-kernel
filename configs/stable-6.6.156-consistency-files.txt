@@ -11,5 +11,6 @@ kernel/trace/trace.c
 kernel/trace/trace.h
 kernel/trace/trace_events_hist.c
 kernel/trace/trace_output.c
+kernel/trace/trace_seq.c
 lib/seq_buf.c
 scripts/ssl-common.h
