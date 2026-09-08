@@ -1,5 +1,6 @@
 certs/extract-cert.c
 include/linux/seq_buf.h
 kernel/bpf/verifier.c
+kernel/trace/trace.c
 kernel/trace/trace_events_hist.c
 lib/seq_buf.c
