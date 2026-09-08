@@ -33,6 +33,14 @@ done < "$repo_root/configs/stable-6.6.156-delete-conflicts.txt"
 test -z "$(git diff --name-only --diff-filter=U)"
 git commit -m "Merge Linux stable through 6.6.156"
 
+# Recursive merge resolution can combine old Android/vendor sides with only
+# part of a later stable change. Keep each proven coupled implementation set
+# at the exact 6.6.156 revision instead of masking compile errors piecemeal.
+while IFS= read -r source_file; do
+    git restore --source="$LINUX_STABLE_COMMIT" --staged --worktree -- "$source_file"
+done < "$repo_root/configs/stable-6.6.156-consistency-files.txt"
+git commit -m "Restore coupled Linux 6.6.156 implementation sets"
+
 test "$(sed -n 's/^VERSION = //p' Makefile)" = 6
 test "$(sed -n 's/^PATCHLEVEL = //p' Makefile)" = 6
 test "$(sed -n 's/^SUBLEVEL = //p' Makefile)" = 156
