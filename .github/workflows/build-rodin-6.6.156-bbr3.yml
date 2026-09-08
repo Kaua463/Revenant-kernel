@@ -87,8 +87,8 @@ jobs:
           done
           test "$(source/scripts/config --file out/.config -s TCP_CONG_BBR1)" = m
           test "$(source/scripts/config --file out/.config --state KSU_SUSFS)" = undef
-          test "$(source/scripts/config --file out/.config --get-str DEFAULT_NET_SCH)" = fq
-          test "$(source/scripts/config --file out/.config --get-str DEFAULT_TCP_CONG)" = bbr
+          grep -qx 'CONFIG_DEFAULT_NET_SCH="fq"' out/.config
+          grep -qx 'CONFIG_DEFAULT_TCP_CONG="bbr"' out/.config
 
       - name: Build kernel, DTs and all configured modules
         run: |
