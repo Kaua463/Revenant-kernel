@@ -124,7 +124,10 @@ jobs:
           if [ -d modules-root ]; then
             tar -C modules-root -I 'zstd -19 -T0' -cf dist/modules.tar.zst .
           fi
-          find dist -type f -exec sha256sum {} + | sort -k2 > dist/SHA256SUMS
+          find dist -type f ! -name SHA256SUMS -exec sha256sum {} + \
+            | sed 's#  dist/#  #' \
+            | sort -k2 > dist/SHA256SUMS
+          (cd dist && sha256sum --check SHA256SUMS)
 
       - name: Upload baseline artifacts
         if: always()

@@ -36,6 +36,7 @@ V11 | No artifact is called rodin-compatible from release-string similarity alon
 V12 | Installer validates device, ROM/kernel family, slot, snapshot state, partition sizes and free space; creates hash-verified rollback before writes and aborts closed on mismatch.
 V13 | Offline gate validates Android boot header v4, 4 KiB pages, 64 MiB boot limit, DTB/DTBO structure, vendor_dlkm filesystem/SELinux metadata, archive integrity, and exact written-file manifest.
 V14 | Hardware gate proves boot completion plus Wi-Fi, Bluetooth, GPU, audio, camera, modem, sensors, storage and BBR availability; panic/watchdog/pstore evidence fails release.
+V15 | Artifact checksum manifests use artifact-relative paths, exclude themselves, and pass an immediate clean-room verification before upload.
 
 ## §T
 
@@ -60,7 +61,8 @@ V14 | Hardware gate proves boot completion plus Wi-Fi, Bluetooth, GPU, audio, ca
 | ID | Bug | Cause | Prevent recurrence |
 |---|---|---|---|
 | B1 | Existing workflow builds 6.6.127 for a ROM shipping 6.6.77 | Base selected from a different kernel package | V1-V2 pin and verify the ROM-matched release |
-| B2 | Wi-Fi/Bluetooth failed in earlier builds | Rodin vendor modules hit protected-symbol and CRC/vermagic gates | V4 preserves the proven compatibility patches and verifies their application |
+| B2 | Wi-Fi/Bluetooth failed in earlier builds | Rodin vendor modules were not co-built against the exact kernel ABI | V3-V4 require the complete co-built module set without bypasses |
 | B3 | Existing README treats a 6.6.89 boot as universal stock recovery | Rollback image provenance was not tied to ROM version | V9 requires exact ROM-version identity |
 | B4 | 2026-09-07 local YAML check failed before parsing | macOS Ruby 2.6/Psych does not support `aliases:` on `YAML.load_file` | V10 uses a compatible validator script |
 | B5 | 2026-09-08 custom GKI bootlooped during init | Public AOSP kernel replaced private Xiaomi kernel while workflow forced incompatible vendor modules past KMI/CRC/vermagic guards | V3-V4,V11 require co-built modules and forbid compatibility bypasses |
+| B6 | Baseline artifact checksum audit could not validate `SHA256SUMS` | Manifest generator included the manifest itself and retained runner-only `dist/` paths | V15 excludes self-reference, emits artifact-relative paths, and verifies before upload |
