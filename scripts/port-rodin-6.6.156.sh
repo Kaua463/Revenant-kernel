@@ -38,10 +38,12 @@ test "$(sed -n 's/^PATCHLEVEL = //p' Makefile)" = 6
 test "$(sed -n 's/^SUBLEVEL = //p' Makefile)" = 156
 
 # Apply the complete official Google BBRv3 series rather than copying one file.
+# For a conflicting hunk, prefer the newer Google networking implementation;
+# the subsequent full build is the compatibility gate for the 6.6 backport.
 while IFS= read -r commit; do
     case "$commit" in ''|'#'*) continue ;; esac
     git merge-base --is-ancestor "$commit" "$BBR_SOURCE_COMMIT"
-    git cherry-pick "$commit"
+    git cherry-pick -X theirs "$commit"
 done < "$repo_root/configs/bbr-v3.commits"
 
 # KernelSU Next is kept out of the source lockstep and symlinked at its pinned
