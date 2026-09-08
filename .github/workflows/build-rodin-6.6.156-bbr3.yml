@@ -41,7 +41,7 @@ jobs:
           set -a
           . configs/rodin-source.lock
           set +a
-          cat configs/rodin-source.lock >> "$GITHUB_ENV"
+          sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' configs/rodin-source.lock >> "$GITHUB_ENV"
 
       - name: Fetch complete rodin and upstream histories
         run: |
@@ -119,9 +119,11 @@ jobs:
           cp -f build.log kernel-banner.txt module-files.txt port-log.txt port-final-status.txt \
             ack-unmerged.txt stable-unmerged.txt dist/ 2>/dev/null || true
           if [ -d modules-root ]; then tar -C modules-root -I 'zstd -19 -T0' -cf dist/modules.tar.zst .; fi
-          find dist -type f ! -name SHA256SUMS -exec sha256sum {} + \
-            | sed 's#  dist/#  #' | sort -k2 > dist/SHA256SUMS
-          (cd dist && sha256sum --check SHA256SUMS)
+          if find dist -type f ! -name SHA256SUMS -print -quit | grep -q .; then
+            find dist -type f ! -name SHA256SUMS -exec sha256sum {} + \
+              | sed 's#  dist/#  #' | sort -k2 > dist/SHA256SUMS
+            (cd dist && sha256sum --check SHA256SUMS)
+          fi
 
       - name: Upload evidence
         if: always()
