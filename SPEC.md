@@ -10,7 +10,7 @@ C1 | ROM reference boot SHA-256=`3c555f2f5dda7b6085dd38a2869d23ffe680c05d5bcc596
 C2 | ROM kernel=`6.6.77-android15-8-gca30f3b4bef6-abogki440974771-4k`; port source must include the matching `mediatek/mt6899` device-module tree and advance within Android `android15-6.6` to Linux 6.6.156 LTS.
 C3 | boot header v4; 64 MiB image; kernel in `boot`; boot ramdisk size 0; device uses 4 KiB pages.
 C4 | Device access is limited to kernel/recovery facts and explicit staged validation; no personal-file inspection. No flash until offline gates pass and exact rollback images are verified.
-C5 | KernelSU-Next stays release-commit-pinned and reproducible; SuSFS and unrelated scheduler/memory/filesystem/network tweaks are excluded. Sole network feature=`TCP BBR + fq`, retained only with config/runtime evidence.
+C5 | KernelSU-Next and Google BBRv3 stay commit-pinned and reproducible; SuSFS and unrelated scheduler/memory/filesystem/network tweaks are excluded. Sole network feature set=`BBRv3 + TCP pacing + fq`, with BBRv1 retained for A/B fallback and runtime evidence required.
 C6 | No automatic release or device flash; only branch artifacts unless explicitly requested.
 
 ## §I
@@ -27,7 +27,7 @@ V2 | Linux 6.6.y updates apply incrementally through 6.6.156 without replacing M
 V3 | Kernel and every shipped `.ko` are built together with one toolchain/config; release/vermagic, modversions, symbol CRCs, dependencies, and unresolved symbols pass gates.
 V4 | No global bypass of KMI protected symbols, CRC, vermagic, module signatures, or ABI checks is present.
 V5 | KernelSU-Next release commit/version and manager signer identity are pinned and validated; SuSFS excluded initially.
-V6 | Only network change is `CONFIG_TCP_CONG_BBR=y` + `CONFIG_NET_SCH_FQ=y`; baseline alternatives remain available and runtime activation requires measured smoke tests.
+V6 | Only network change set is commit-pinned official Google BBRv3 plus TCP pacing and per-flow `fq`; BBRv1 remains selectable, algorithm constants stay upstream, and runtime activation requires measured Wi-Fi/5G smoke tests.
 V7 | Every bundled AnyKernel executable is AArch64 and its source archive is checksum-pinned.
 V8 | No workflow event flashes a device; release creation defaults off.
 V9 | Rollback documentation identifies the exact 3.0.304 `boot.img`; the repository's older 6.6.89 `stock_boot.img` is not presented as a 3.0.304 rollback image.

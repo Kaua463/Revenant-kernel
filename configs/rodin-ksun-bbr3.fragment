@@ -1,0 +1,12 @@
+# KernelSU Next plus the sole network feature set: Google BBRv3, pacing and fq.
+CONFIG_KSU=y
+# CONFIG_KSU_SUSFS is not set
+
+CONFIG_NET_SCHED=y
+CONFIG_NET_SCH_FQ=y
+CONFIG_DEFAULT_FQ=y
+CONFIG_DEFAULT_NET_SCH="fq"
+CONFIG_TCP_CONG_BBR=y
+CONFIG_TCP_CONG_BBR1=m
+CONFIG_DEFAULT_BBR=y
+CONFIG_DEFAULT_TCP_CONG="bbr"

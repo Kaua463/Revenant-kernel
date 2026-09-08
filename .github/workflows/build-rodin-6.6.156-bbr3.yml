@@ -1,0 +1,133 @@
+name: Build rodin 6.6.156 KSU BBRv3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dyperos-3.0.304]
+    paths:
+      - .github/workflows/build-rodin-6.6.156-bbr3.yml
+      - configs/rodin-source.lock
+      - configs/bbr-v3.commits
+      - configs/rodin-ksun-bbr3.fragment
+      - scripts/port-rodin-6.6.156.sh
+      - scripts/validate-source-lock.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rodin-port-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  port-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate locked inputs
+        run: scripts/validate-source-lock.sh
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates curl flex git jq \
+            libelf-dev libssl-dev lz4 pahole python3 rsync xz-utils zstd
+
+      - name: Load source lock
+        run: |
+          set -a
+          . configs/rodin-source.lock
+          set +a
+          cat configs/rodin-source.lock >> "$GITHUB_ENV"
+
+      - name: Fetch complete rodin and upstream histories
+        run: |
+          git clone --filter=blob:none --no-checkout "$RODIN_SOURCE_URL" source
+          git -C source checkout --detach "$RODIN_CLEAN_COMMIT"
+          git -C source remote add ack "$ANDROID_LTS_URL"
+          git -C source fetch --filter=blob:none --no-tags ack \
+            "$ANDROID_LTS_BRANCH:refs/remotes/ack/$ANDROID_LTS_BRANCH"
+          test "$(git -C source rev-parse refs/remotes/ack/$ANDROID_LTS_BRANCH)" = "$ANDROID_LTS_COMMIT"
+          git -C source remote add stable "$LINUX_STABLE_URL"
+          git -C source fetch --no-tags stable "tag $LINUX_STABLE_TAG"
+          test "$(git -C source rev-parse "$LINUX_STABLE_TAG^{commit}")" = "$LINUX_STABLE_COMMIT"
+          git -C source remote add google-bbr "$BBR_SOURCE_URL"
+          git -C source fetch --filter=blob:none --no-tags google-bbr \
+            "$BBR_SOURCE_BRANCH:refs/remotes/google-bbr/$BBR_SOURCE_BRANCH"
+          test "$(git -C source rev-parse refs/remotes/google-bbr/$BBR_SOURCE_BRANCH)" = "$BBR_SOURCE_COMMIT"
+
+      - name: Fetch pinned toolchain and KernelSU Next
+        run: |
+          git clone --filter=blob:none "$CLANG_SOURCE_URL" toolchains/clang
+          git -C toolchains/clang checkout --detach "$CLANG_COMMIT"
+          git clone --filter=blob:none "$KSU_SOURCE_URL" KernelSU-Next
+          git -C KernelSU-Next checkout --detach "$KSU_COMMIT"
+          test "$(git -C KernelSU-Next describe --tags --always)" = "$KSU_VERSION_TAG"
+
+      - name: Port ACK, stable and official BBRv3 series
+        run: |
+          chmod +x scripts/port-rodin-6.6.156.sh
+          cd source
+          REVENANT_REPO_ROOT="$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/scripts/port-rodin-6.6.156.sh"
+
+      - name: Configure KSU, BBRv3, pacing and fq
+        run: |
+          export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
+          make -C source O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 rodin_defconfig
+          source/scripts/kconfig/merge_config.sh -m -O out out/.config configs/rodin-ksun-bbr3.fragment
+          make -C source O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
+          for symbol in KSU NET_SCHED NET_SCH_FQ DEFAULT_FQ TCP_CONG_BBR DEFAULT_BBR; do
+            test "$(source/scripts/config --file out/.config -s "$symbol")" = y
+          done
+          test "$(source/scripts/config --file out/.config -s TCP_CONG_BBR1)" = m
+          test "$(source/scripts/config --file out/.config --state KSU_SUSFS)" = undef
+          test "$(source/scripts/config --file out/.config --get-str DEFAULT_NET_SCH)" = fq
+          test "$(source/scripts/config --file out/.config --get-str DEFAULT_TCP_CONG)" = bbr
+
+      - name: Build kernel, DTs and all configured modules
+        run: |
+          export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
+          make -C source -j2 O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            Image Image.gz modules dtbs 2>&1 | tee build.log
+
+      - name: Install and validate modules
+        run: |
+          export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
+          make -C source O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            INSTALL_MOD_PATH="$GITHUB_WORKSPACE/modules-root" modules_install
+          find modules-root -type l -delete
+          find modules-root -type f -name '*.ko' -print | sort > module-files.txt
+          test "$(wc -l < module-files.txt)" -ge 600
+          test -s out/Module.symvers
+          test -s out/arch/arm64/boot/Image
+          strings out/arch/arm64/boot/Image | grep -m1 '^Linux version' | tee kernel-banner.txt
+          grep -q '6.6.156' kernel-banner.txt
+          grep -q 'tcp_bbr_init' out/Module.symvers
+          test -f modules-root/lib/modules/*/kernel/net/ipv4/tcp_bbr1.ko
+          if grep -R -n -E 'load anyway|force load|KMI bypass' source/kernel/module; then exit 1; fi
+
+      - name: Assemble evidence
+        if: always()
+        run: |
+          mkdir -p dist
+          cp -f out/.config dist/config 2>/dev/null || true
+          cp -f out/Module.symvers out/modules.order dist/ 2>/dev/null || true
+          cp -f out/arch/arm64/boot/Image out/arch/arm64/boot/Image.gz dist/ 2>/dev/null || true
+          cp -f build.log kernel-banner.txt module-files.txt port-log.txt port-final-status.txt \
+            ack-unmerged.txt stable-unmerged.txt dist/ 2>/dev/null || true
+          if [ -d modules-root ]; then tar -C modules-root -I 'zstd -19 -T0' -cf dist/modules.tar.zst .; fi
+          find dist -type f ! -name SHA256SUMS -exec sha256sum {} + \
+            | sed 's#  dist/#  #' | sort -k2 > dist/SHA256SUMS
+          (cd dist && sha256sum --check SHA256SUMS)
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rodin-6.6.156-ksun-bbr3-${{ github.run_number }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
