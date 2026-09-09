@@ -1,0 +1,133 @@
+name: Audit rodin 6.6.77 KSUN SUSFS ABI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dyperos-3.0.304]
+    paths:
+      - .github/workflows/audit-rodin-6.6.77-ksun-susfs.yml
+      - configs/rodin-6.6.77-ksun-susfs.fragment
+      - scripts/integrate-ksun-susfs-6.6.77.sh
+      - scripts/validate-ksun-susfs-port.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rodin-6.6.77-ksun-susfs-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  KMI_BRANCH: common-android15-6.6
+  KMI_TAG: android15-6.6.77_r00
+  KMI_TAG_OBJECT: 79d26ca363880c3c6f7841045e46427bee6c3c3b
+  KMI_COMMIT: f7ebe251035c0d15ff90c6a0a320697932785fad
+  KSU_COMMIT: 30802e7260e2387176b9301377e88fc6fb0356b7
+  SUSFS_COMMIT: b03e1a9da3d24eea766b48871c71a6aed9ac98a6
+  SUSFS_FIX_COMMIT: 35fac8ee31035fb73a8b9301b50c2bdb4ff7feb7
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate repository gates
+        run: scripts/validate-ksun-susfs-port.sh
+
+      - name: Install dependencies
+        run: |
+          while IFS= read -r apt_source; do
+            sudo rm -f "$apt_source"
+          done < <(sudo grep -RIl 'dl.google.com/linux/chrome' /etc/apt/sources.list.d || true)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates curl flex git libelf-dev \
+            libssl-dev lz4 patch python3 rsync xz-utils zip zstd
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --fail --location --retry 5 \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            --output "$RUNNER_TEMP/bin/repo"
+          chmod +x "$RUNNER_TEMP/bin/repo"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch exact ACK and integration sources
+        run: |
+          mkdir ws
+          cd ws
+          repo init --depth=1 -u https://android.googlesource.com/kernel/manifest \
+            -b "$KMI_BRANCH" -m default.xml
+          repo sync -c -j2 --no-tags --no-clone-bundle --fail-fast
+          git -C common fetch https://android.googlesource.com/kernel/common.git \
+            "refs/tags/$KMI_TAG:refs/tags/$KMI_TAG" --depth=1
+          test "$(git -C common rev-parse "refs/tags/$KMI_TAG")" = "$KMI_TAG_OBJECT"
+          git -C common checkout --detach "$KMI_TAG"
+          test "$(git -C common rev-parse HEAD)" = "$KMI_COMMIT"
+          git clone --filter=blob:none https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+          git -C KernelSU-Next checkout --detach "$KSU_COMMIT"
+          git clone --filter=blob:none --branch gki-android15-6.6 \
+            https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+          git -C susfs4ksu checkout --detach "$SUSFS_COMMIT"
+          git clone --filter=blob:none https://github.com/WildKernels/kernel_patches.git susfs-fixes
+          git -C susfs-fixes checkout --detach "$SUSFS_FIX_COMMIT"
+
+      - name: Integrate pinned KernelSU Next and SUSFS
+        run: |
+          chmod +x scripts/integrate-ksun-susfs-6.6.77.sh
+          KERNEL_DIR="$GITHUB_WORKSPACE/ws/common" \
+          KSU_DIR="$GITHUB_WORKSPACE/ws/KernelSU-Next" \
+          SUSFS_DIR="$GITHUB_WORKSPACE/ws/susfs4ksu" \
+          FIX_DIR="$GITHUB_WORKSPACE/ws/susfs-fixes" \
+            scripts/integrate-ksun-susfs-6.6.77.sh
+          cp configs/rodin-6.6.77-ksun-susfs.fragment \
+            ws/common/arch/arm64/configs/revenant_ksun_susfs.fragment
+
+      - name: Build 4K ABI candidate
+        run: |
+          cd ws
+          tools/bazel build --lto=thin --page_size=4k \
+            --defconfig_fragment=//common:arch/arm64/configs/revenant_ksun_susfs.fragment \
+            //common:kernel_aarch64_dist
+
+      - name: Collect and validate evidence
+        run: |
+          mkdir -p dist
+          find -L ws/bazel-bin -type f -name Image -path '*kernel_aarch64*' -print -quit \
+            | xargs -I{} cp '{}' dist/Image
+          find -L ws/bazel-bin -type f -name Module.symvers -path '*kernel_aarch64*' -print -quit \
+            | xargs -I{} cp '{}' dist/Module.symvers
+          find -L ws/bazel-bin -type f -name '*.config' -path '*kernel_aarch64*' -print -quit \
+            | xargs -I{} cp '{}' dist/config
+          test -s dist/Image
+          test -s dist/Module.symvers
+          for symbol in KSU KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT \
+            KSU_SUSFS_SUS_KSTAT KSU_SUSFS_SPOOF_UNAME \
+            KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+            KSU_SUSFS_OPEN_REDIRECT KSU_SUSFS_SUS_MAP; do
+            grep -qx "CONFIG_${symbol}=y" dist/config
+          done
+          grep -qx '# CONFIG_KSU_SUSFS_ENABLE_LOG is not set' dist/config
+          strings dist/Image | grep -m1 '^Linux version' | tee dist/kernel-banner.txt
+          grep -q '6.6.77-android15-8.*-4k' dist/kernel-banner.txt
+          strings dist/Image | grep -m3 -E 'KernelSU|SUSFS' | tee dist/root-feature-strings.txt
+          {
+            echo "KMI_COMMIT=$KMI_COMMIT"
+            echo "KSU_COMMIT=$KSU_COMMIT"
+            echo "KSU_VERSION=33201"
+            echo "SUSFS_COMMIT=$SUSFS_COMMIT"
+            echo "SUSFS_VERSION=v2.2.0"
+            echo "SUSFS_FIX_COMMIT=$SUSFS_FIX_COMMIT"
+            echo "LTO_MODE=thin-abi-audit"
+          } > dist/provenance.txt
+          find dist -type f ! -name SHA256SUMS -exec sha256sum {} + \
+            | sed 's#  dist/#  #' | sort -k2 > dist/SHA256SUMS
+          (cd dist && sha256sum --check SHA256SUMS)
+
+      - name: Upload candidate ABI evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: rodin-6.6.77-ksun33201-susfs2.2-abi-${{ github.run_number }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 14

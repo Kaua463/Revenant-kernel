@@ -97,3 +97,4 @@ V24 | ABI-audit build ! finish within runner cap; thin LTO allowed because MODVE
 | B20 | Initial ABI workflow dispatch returned HTTP 404 | GitHub exposes `workflow_dispatch` only after workflow exists on default branch | V22 adds narrow initial push trigger |
 | B21 | Baseline source gate rejected correct `android15-6.6.77_r00` checkout | Gate compared annotated-tag object hash against peeled commit hash | V23 validates both identities |
 | B22 | Full-LTO ABI baseline cancelled after 29 minutes | Hosted runner terminated long link near execution cap | V24 uses thin LTO for ABI control build |
+| B23 | SUSFS v2.2.0 patch rejected many KernelSU Next v3.3.0 hunks | SUSFS patch and KSU release evolved on different source layouts | V5 pins compatible KSUN 33201 + SUSFS v2.2.0 + dedicated fix-set tuple |
