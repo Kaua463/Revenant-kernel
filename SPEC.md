@@ -48,6 +48,7 @@ V23 | Annotated source tag ! pin+validate tag object and peeled commit separatel
 V24 | ABI-audit build ! finish within runner cap; thin LTO allowed because MODVERSIONS CRC derives declarations/config, while final release retains production LTO validation.
 V25 | Final pinned KSU/SUSFS compatibility fixes apply with zero fuzz after exact audited normalization; any unexpected reject, duplicate hook/include, or ignored patch blocks build.
 V26 | Clean-room validation uses an independent checkout and fail-fast shell; success marker is emitted only after the full integration command returns zero.
+V27 | Every post-patch integration gate emits a named checkpoint; final ACK delta is validated by a platform-independent ordered content manifest, not textual `git diff` serialization.
 
 ## §T
 
@@ -105,3 +106,4 @@ V26 | Clean-room validation uses an independent checkout and fail-fast shell; su
 | B26 | SUSFS 6.6 patch left three rejects on exact ACK 6.6.77 | Patch was authored against a later 6.6 point release with different include and padded-VMA context | V25 permits only three exact audited adaptations and rejects any changed reject set |
 | B27 | Post-v3.3 KSU kernel pin could be paired with an incompatible manager | Kernel and manager may evolve their UAPI independently | V5 gates ancestry, identical v3.3 UAPI tree/native bridge, and manager minimum kernel version |
 | B28 | First local clean-room command printed PASS after its shared clone failed | Partial/promisor Git repository could not serve a shared clone, and the outer diagnostic shell was not fail-fast | V26 requires independent checkout plus `set -euo pipefail` before any success marker |
+| B29 | Remote integration exited after patch output without identifying its failed gate | Post-patch assertions were silent and final delta used Git diff serialization | V27 labels each gate and hashes ordered file contents directly |

@@ -37,5 +37,6 @@ The ROM userspace is Android 16, while its kernel ABI branch is Android 15 GKI 6
 - Clean-room GNU patch integration on exact ACK 6.6.77: pass, zero residual rejects/originals
 - Deterministic KernelSU source delta SHA-256: `4d74eedefa4ae5679126dc7c79096ef425302ed1b7a1042b3fc06a6af603d18c`
 - Deterministic tracked ACK source delta SHA-256: `3cb6faaa3e9b98d02b953685f50f2af902f37ac61b6e9e06964ac1daac22667d`
+- Platform-independent 26-file content manifest SHA-256: `ceb50cf610affc7a7a671fb07568e5ec033e9d63ad12b7de1a51994f6c935fd2`
 
 This is integration evidence only. It does not become a flashable candidate until compilation, ABI comparison, boot-image validation, and the staged hardware gate pass.

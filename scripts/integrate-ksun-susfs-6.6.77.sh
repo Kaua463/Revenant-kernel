@@ -127,7 +127,11 @@ expected_kernel_rejects='fs/exec.c.rej
 fs/proc/base.c.rej
 fs/proc/task_mmu.c.rej'
 actual_kernel_rejects=$(cd "$KERNEL_DIR" && find fs -type f -name '*.rej' -print | sort)
-test "$actual_kernel_rejects" = "$expected_kernel_rejects"
+if test "$actual_kernel_rejects" != "$expected_kernel_rejects"; then
+  printf 'unexpected kernel rejects:\n%s\n' "$actual_kernel_rejects" >&2
+  exit 1
+fi
+echo 'kernel base patch produced only the three audited ACK 6.6.77 rejects'
 
 python3 - "$KERNEL_DIR" <<'PY'
 from pathlib import Path
@@ -167,6 +171,7 @@ for path, (old, new) in replacements.items():
     assert text.count(old) == 1, path
     path.write_text(text.replace(old, new, 1))
 PY
+echo 'three audited ACK 6.6.77 adaptations applied'
 
 find "$KERNEL_DIR" -type f \( -name '*.orig' -o -name '*.rej' \) -delete
 rm -f "$KERNEL_DIR/50_add_susfs_in_gki-android15-6.6.patch"
@@ -195,10 +200,27 @@ test "$(grep -c 'source "drivers/kernelsu/Kconfig"' "$KERNEL_DIR/drivers/Kconfig
 if find "$KSU_DIR" "$KERNEL_DIR" -type f -name '*.rej' -print -quit | grep -q .; then
   exit 1
 fi
+echo 'root integration semantic gates passed with zero residual rejects'
 
-if command -v sha256sum >/dev/null 2>&1; then
-  kernel_diff_sha=$(git -C "$KERNEL_DIR" diff --binary | sha256sum | awk '{print $1}')
-else
-  kernel_diff_sha=$(git -C "$KERNEL_DIR" diff --binary | shasum -a 256 | awk '{print $1}')
-fi
-test "$kernel_diff_sha" = 3cb6faaa3e9b98d02b953685f50f2af902f37ac61b6e9e06964ac1daac22667d
+kernel_manifest_sha=$(python3 - "$KERNEL_DIR" <<'PY'
+from pathlib import Path
+import hashlib
+import subprocess
+import sys
+
+root = Path(sys.argv[1])
+paths = subprocess.check_output(
+    ["git", "-C", str(root), "diff", "--name-only", "--diff-filter=ACMRTUXB"],
+    text=True,
+).splitlines()
+assert len(paths) == 26, paths
+digest = hashlib.sha256()
+for relative in sorted(paths):
+    digest.update(relative.encode() + b"\0")
+    digest.update(hashlib.sha256((root / relative).read_bytes()).digest())
+print(digest.hexdigest())
+PY
+)
+echo "tracked kernel source manifest SHA-256: $kernel_manifest_sha"
+test "$kernel_manifest_sha" = ceb50cf610affc7a7a671fb07568e5ec033e9d63ad12b7de1a51994f6c935fd2
+echo 'pinned KSUN 33239 + SUSFS 2.2 integration complete'
