@@ -71,10 +71,17 @@ sed -i 's/^BTF_KFUNCS_END(tcp_bbr1_check_kfunc_ids)$/BTF_SET8_END(tcp_bbr1_check
 # retain its externally visible definition after taking Google's newer body.
 sed -i 's/^static struct bpf_struct_ops bpf_tcp_congestion_ops =/struct bpf_struct_ops bpf_tcp_congestion_ops =/' net/ipv4/bpf_tcp_ca.c
 
+# Google's newer struct-ops registration carries a CFI stub table. Rodin's
+# native bpf_struct_ops has no cfi_stubs member and registers this global ops
+# object through its existing path, so the cherry-pick leaves the table unused.
+test "$(grep -c '^static struct tcp_congestion_ops __bpf_ops_tcp_congestion_ops = {$' net/ipv4/bpf_tcp_ca.c)" = 1
+perl -0pi -e 's/\nstatic struct tcp_congestion_ops __bpf_ops_tcp_congestion_ops = \{.*?\n\};\n/\n/s' net/ipv4/bpf_tcp_ca.c
+
 test "$(grep -c '^__bpf_kfunc static void bbr_main(struct sock \*sk,$' net/ipv4/tcp_bbr.c)" = 1
 test "$(grep -c '^__bpf_kfunc static void bbr1_main(struct sock \*sk,$' net/ipv4/tcp_bbr1.c)" = 1
 test "$(grep -c '^static void bpf_tcp_ca_cong_control(struct sock \*sk,$' net/ipv4/bpf_tcp_ca.c)" = 1
 test "$(grep -c '^struct bpf_struct_ops bpf_tcp_congestion_ops = {$' net/ipv4/bpf_tcp_ca.c)" = 1
+! grep -q '__bpf_ops_tcp_congestion_ops' net/ipv4/bpf_tcp_ca.c
 ! grep -q 'BTF_KFUNCS_.*tcp_bbr1_check_kfunc_ids' net/ipv4/tcp_bbr1.c
 grep -q '^BTF_SET8_START(tcp_bbr1_check_kfunc_ids)$' net/ipv4/tcp_bbr1.c
 grep -q '^BTF_SET8_END(tcp_bbr1_check_kfunc_ids)$' net/ipv4/tcp_bbr1.c
