@@ -33,7 +33,10 @@ jobs:
         run: |
           # The hosted image may carry a temporarily inconsistent Chrome APT
           # index; Chrome is unrelated to this kernel build.
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          while IFS= read -r apt_source; do
+            sudo rm -f "$apt_source"
+          done < <(sudo grep -RIl 'dl.google.com/linux/chrome' /etc/apt/sources.list.d || true)
+          ! sudo grep -RIl 'dl.google.com/linux/chrome' /etc/apt/sources.list.d
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             bc bison build-essential ca-certificates curl flex git jq \
