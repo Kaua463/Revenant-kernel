@@ -1,0 +1,89 @@
+name: Audit rodin stock 6.6.77 ABI baseline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rodin-6.6.77-abi-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  KMI_BRANCH: common-android15-6.6
+  KMI_TAG: android15-6.6.77_r00
+  KMI_COMMIT: 79d26ca36388
+
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          while IFS= read -r apt_source; do
+            sudo rm -f "$apt_source"
+          done < <(sudo grep -RIl 'dl.google.com/linux/chrome' /etc/apt/sources.list.d || true)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates curl flex git libelf-dev \
+            libssl-dev lz4 python3 rsync xz-utils zip zstd
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --fail --location --retry 5 \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            --output "$RUNNER_TEMP/bin/repo"
+          chmod +x "$RUNNER_TEMP/bin/repo"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch ACK build environment and exact common tag
+        run: |
+          mkdir ws
+          cd ws
+          repo init --depth=1 -u https://android.googlesource.com/kernel/manifest \
+            -b "$KMI_BRANCH" -m default.xml
+          repo sync -c -j2 --no-tags --no-clone-bundle --fail-fast
+          git -C common fetch https://android.googlesource.com/kernel/common.git \
+            "refs/tags/$KMI_TAG:refs/tags/$KMI_TAG" --depth=1
+          git -C common checkout --detach "$KMI_TAG"
+          test "$(git -C common rev-parse --short=12 HEAD)" = "$KMI_COMMIT"
+          grep -qx 'KMI_GENERATION=8' common/build.config.common
+
+      - name: Build untouched 4K GKI baseline
+        run: |
+          cd ws
+          tools/bazel build --lto=full --page_size=4k //common:kernel_aarch64_dist
+
+      - name: Collect ABI evidence
+        run: |
+          mkdir -p dist
+          find -L ws/bazel-bin -type f -name Image -path '*kernel_aarch64*' -print -quit \
+            | xargs -I{} cp '{}' dist/Image
+          find -L ws/bazel-bin -type f -name Module.symvers -path '*kernel_aarch64*' -print -quit \
+            | xargs -I{} cp '{}' dist/Module.symvers
+          find -L ws/bazel-bin -type f -name '*.config' -path '*kernel_aarch64*' -print -quit \
+            | xargs -I{} cp '{}' dist/config || true
+          test -s dist/Image
+          test -s dist/Module.symvers
+          strings dist/Image | grep -m1 '^Linux version' | tee dist/kernel-banner.txt
+          grep -q '6.6.77-android15-8.*-4k' dist/kernel-banner.txt
+          grep -qv 'KernelSU' dist/kernel-banner.txt
+          {
+            echo "KMI_TAG=$KMI_TAG"
+            echo "KMI_COMMIT=$(git -C ws/common rev-parse HEAD)"
+            echo "MANIFEST_COMMIT=$(git -C ws/.repo/manifests rev-parse HEAD)"
+            echo "MODULE_SYMVERS_LINES=$(wc -l < dist/Module.symvers)"
+          } > dist/provenance.txt
+          find dist -type f ! -name SHA256SUMS -exec sha256sum {} + \
+            | sed 's#  dist/#  #' | sort -k2 > dist/SHA256SUMS
+          (cd dist && sha256sum --check SHA256SUMS)
+
+      - name: Upload baseline ABI evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: rodin-stock-6.6.77-abi-baseline-${{ github.run_number }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 14

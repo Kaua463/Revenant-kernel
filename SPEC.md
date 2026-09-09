@@ -2,7 +2,7 @@
 
 ## §G
 
-G1 | Build the complete pinned POCO X7 Pro `rodin`/MT6899 Linux 6.6.102 kernel+module tree for DyperOS 3.0.304, preserving existing mods and adding KernelSU Next plus the requested network set.
+G1 | Build complete pinned POCO X7 Pro `rodin`/MT6899 kernel+module tree for DyperOS 3.0.304, preserving existing mods and adding KernelSU Next + SUSFS + requested network set.
 
 ## §C
 
@@ -10,7 +10,7 @@ C1 | ROM reference boot SHA-256=`3c555f2f5dda7b6085dd38a2869d23ffe680c05d5bcc596
 C2 | ROM kernel=`6.6.77-android15-8-gca30f3b4bef6-abogki440974771-4k`; source is pinned complete `rodin-gpu` 6.6.102 with `mediatek/mt6899` modules. No ACK/stable version uplift.
 C3 | boot header v4; 64 MiB image; kernel in `boot`; boot ramdisk size 0; device uses 4 KiB pages.
 C4 | Device access is limited to kernel/recovery facts and explicit staged validation; no personal-file inspection. No flash until offline gates pass and exact rollback images are verified.
-C5 | Preserve the complete pinned `rodin-gpu` baseline and its existing mods. Add no new unrelated tweak; replace/extend only congestion-control and queueing with pinned Google BBRv3 + TCP pacing + `fq`, retaining BBRv1 for A/B fallback. SuSFS remains excluded.
+C5 | Preserve complete pinned `rodin-gpu` baseline and existing mods. Add no unrelated tweak; network delta limited to pinned Google BBRv3 + TCP pacing + `fq`, retaining BBRv1. Root-hiding delta limited to pinned KernelSU Next-compatible SUSFS and documented userspace controls.
 C6 | No automatic release or device flash; only branch artifacts unless explicitly requested.
 
 ## §I
@@ -26,7 +26,7 @@ V1 | Base contains the complete rodin `mediatek/mt6899` kernel-module sources; s
 V2 | Kernel stays at pinned rodin 6.6.102; active workflow fetches no newer ACK/stable revision and preserves MediaTek drivers/config plus existing baseline mods.
 V3 | Kernel and every shipped `.ko` are built together with one toolchain/config; release/vermagic, modversions, symbol CRCs, dependencies, and unresolved symbols pass gates.
 V4 | No global bypass of KMI protected symbols, CRC, vermagic, module signatures, or ABI checks is present.
-V5 | KernelSU-Next release commit/version and manager signer identity are pinned and validated; SuSFS excluded initially.
+V5 | KernelSU Next, SUSFS patch set, manager version, commits, checksums, signer identity pinned & validated as mutually compatible.
 V6 | Relative to the pinned complete `rodin-gpu` baseline, only the network change set is official Google BBRv3 plus TCP pacing and per-flow `fq`; BBRv1 remains selectable, algorithm constants stay upstream, and runtime activation requires measured Wi-Fi/5G smoke tests.
 V7 | Every bundled AnyKernel executable is AArch64 and its source archive is checksum-pinned.
 V8 | No workflow event flashes a device; release creation defaults off.
@@ -39,6 +39,10 @@ V14 | Hardware gate proves boot completion plus Wi-Fi, Bluetooth, GPU, audio, ca
 V15 | Artifact checksum manifests use artifact-relative paths, exclude themselves, and pass an immediate clean-room verification before upload.
 V16 | BBRv3 integration matches rodin's native two-argument `cong_control` and `BTF_SET8` API while preserving rodin's generic `bpf_tcp_ca.c` byte-for-byte before any final build.
 V17 | BBRv1 fallback is built-in while it calls rodin-internal non-exported TCP helpers; config and artifacts reject a `tcp_bbr1.ko` module boundary.
+V18 | SUSFS changes limited to upstream/pinned integration; no ABI/KMI/CRC/vermagic/signature bypass, no unreviewed concealment patch, no claim of undetectable root.
+V19 | Root persists via current-slot `boot`; installer preserves ramdisk/DTB layout, validates rebuilt image, and emits hash-verified stock restore ZIP before flash ZIP.
+V20 | Port starts from exhaustive stock-vs-Revenant matrix: release/config, exported+required symbols, MODVERSIONS CRC, vermagic, module deps, namespaces, signatures, DTB/DTBO, boot layout; unresolved critical delta blocks installer.
+V21 | Fixes preserve stock ABI or rebuild exact dependent module set; forced module loading and KMI/protected-symbol bypass remain forbidden.
 
 ## §T
 
@@ -57,6 +61,12 @@ V17 | BBRv1 fallback is built-in while it calls rodin-internal non-exported TCP 
 | T11 | Build safe installer, complete rollback package, and offline validation gates | . |
 | T12 | Run GitHub Actions; audit artifacts, ABI, modules, images and manifests | x |
 | T13 | Present offline evidence; perform explicit staged hardware validation only after gates pass | . |
+| T14 | Pin and audit KernelSU Next + compatible SUSFS integration | . |
+| T15 | Integrate SUSFS; add config/source/version/security gates | . |
+| T16 | Build OrangeFox flash+restore ZIPs; run offline boot/ABI/module gates | . |
+| T17 | Extract stock 6.6.77 technical evidence and build compatibility matrix | ~ |
+| T18 | Fix every resolvable critical incompatibility without bypasses | . |
+| T19 | Rebuild; run clean-room ABI/module/boot-image validation | . |
 
 ## §B
 
