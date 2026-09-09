@@ -64,10 +64,10 @@ V24 | ABI-audit build ! finish within runner cap; thin LTO allowed because MODVE
 | T11 | Build safe installer, complete rollback package, and offline validation gates | . |
 | T12 | Run GitHub Actions; audit artifacts, ABI, modules, images and manifests | x |
 | T13 | Present offline evidence; perform explicit staged hardware validation only after gates pass | . |
-| T14 | Pin and audit KernelSU Next + compatible SUSFS integration | . |
+| T14 | Pin and audit KernelSU Next + compatible SUSFS integration | ~ |
 | T15 | Integrate SUSFS; add config/source/version/security gates | . |
 | T16 | Build OrangeFox flash+restore ZIPs; run offline boot/ABI/module gates | . |
-| T17 | Extract stock 6.6.77 technical evidence and build compatibility matrix | ~ |
+| T17 | Extract stock 6.6.77 technical evidence and build compatibility matrix | x |
 | T18 | Fix every resolvable critical incompatibility without bypasses | . |
 | T19 | Rebuild; run clean-room ABI/module/boot-image validation | . |
 
