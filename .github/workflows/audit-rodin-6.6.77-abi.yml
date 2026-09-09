@@ -58,10 +58,10 @@ jobs:
           test "$(git -C common rev-parse HEAD)" = "$KMI_COMMIT"
           grep -qx 'KMI_GENERATION=8' common/build.config.common
 
-      - name: Build untouched 4K GKI baseline
+      - name: Build untouched 4K GKI ABI baseline
         run: |
           cd ws
-          tools/bazel build --lto=full --page_size=4k //common:kernel_aarch64_dist
+          tools/bazel build --lto=thin --page_size=4k //common:kernel_aarch64_dist
 
       - name: Collect ABI evidence
         run: |
@@ -81,6 +81,7 @@ jobs:
             echo "KMI_TAG=$KMI_TAG"
             echo "KMI_COMMIT=$(git -C ws/common rev-parse HEAD)"
             echo "MANIFEST_COMMIT=$(git -C ws/.repo/manifests rev-parse HEAD)"
+            echo "LTO_MODE=thin-abi-audit"
             echo "MODULE_SYMVERS_LINES=$(wc -l < dist/Module.symvers)"
           } > dist/provenance.txt
           find dist -type f ! -name SHA256SUMS -exec sha256sum {} + \

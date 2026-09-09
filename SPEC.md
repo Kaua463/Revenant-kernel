@@ -45,6 +45,7 @@ V20 | Port starts from exhaustive stock-vs-Revenant matrix: release/config, expo
 V21 | Fixes preserve stock ABI or rebuild exact dependent module set; forced module loading and KMI/protected-symbol bypass remain forbidden.
 V22 | New audit workflow absent from default branch ! narrow push trigger on `dyperos-3.0.304`; manual dispatch alone forbidden for initial run.
 V23 | Annotated source tag ! pin+validate tag object and peeled commit separately before build.
+V24 | ABI-audit build ! finish within runner cap; thin LTO allowed because MODVERSIONS CRC derives declarations/config, while final release retains production LTO validation.
 
 ## §T
 
@@ -95,3 +96,4 @@ V23 | Annotated source tag ! pin+validate tag object and peeled commit separatel
 | B19 | Fourth frozen 6.6.102 sweep compiled every object but failed modpost on `tcp_tso_autosize` from `tcp_bbr1.ko` | BBRv1 was modular although it calls a TCP core helper intentionally not exported by rodin | V17 keeps BBRv1 built-in and gates both its object and absence of a fallback module |
 | B20 | Initial ABI workflow dispatch returned HTTP 404 | GitHub exposes `workflow_dispatch` only after workflow exists on default branch | V22 adds narrow initial push trigger |
 | B21 | Baseline source gate rejected correct `android15-6.6.77_r00` checkout | Gate compared annotated-tag object hash against peeled commit hash | V23 validates both identities |
+| B22 | Full-LTO ABI baseline cancelled after 29 minutes | Hosted runner terminated long link near execution cap | V24 uses thin LTO for ABI control build |

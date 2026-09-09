@@ -50,11 +50,37 @@ def read_symvers(path: pathlib.Path):
     return symbols
 
 
+def read_module_exports(module: pathlib.Path):
+    try:
+        from elftools.elf.elffile import ELFFile
+    except ImportError as exc:
+        raise SystemExit("--stock-providers requires pyelftools") from exc
+    result = {}
+    with module.open("rb") as stream:
+        elf = ELFFile(stream)
+        symtab = elf.get_section_by_name(".symtab")
+        if symtab is None:
+            return result
+        for symbol in symtab.iter_symbols():
+            if not symbol.name.startswith("__crc_"):
+                continue
+            section_index = symbol.entry["st_shndx"]
+            if not isinstance(section_index, int):
+                continue
+            section = elf.get_section(section_index)
+            offset = symbol.entry["st_value"]
+            data = section.data()[offset : offset + 4]
+            if len(data) == 4:
+                result[symbol.name[6:]] = struct.unpack("<I", data)[0]
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--stock-modules", type=pathlib.Path, required=True)
     parser.add_argument("--candidate-modules", type=pathlib.Path, required=True)
     parser.add_argument("--candidate-symvers", type=pathlib.Path, required=True)
+    parser.add_argument("--stock-providers", action="store_true")
     parser.add_argument("--objcopy", required=True)
     parser.add_argument("--json", type=pathlib.Path, required=True)
     args = parser.parse_args()
@@ -65,6 +91,13 @@ def main():
     for module in candidate:
         candidate_by_name[module.name].append(str(module))
     symvers = read_symvers(args.candidate_symvers)
+    stock_exports = {}
+    if args.stock_providers:
+        for module in stock:
+            for name, crc in read_module_exports(module).items():
+                old = stock_exports.setdefault(name, crc)
+                if old != crc:
+                    raise ValueError(f"conflicting stock provider CRC for {name}")
 
     symbol_state = collections.Counter()
     module_rows = []
@@ -73,7 +106,8 @@ def main():
     for module in stock:
         states = collections.Counter()
         for name, stock_crc in read_versions(module, args.objcopy):
-            candidate_crc = symvers.get(name)
+            provider = "stock_module" if name in stock_exports else "candidate_kernel"
+            candidate_crc = stock_exports.get(name, symvers.get(name))
             if candidate_crc is None:
                 state = "missing"
             elif candidate_crc != stock_crc:
@@ -82,7 +116,7 @@ def main():
                 state = "match"
             states[state] += 1
             old = unique_imports.get(name)
-            row = {"stock_crc": f"0x{stock_crc:08x}", "candidate_crc": None if candidate_crc is None else f"0x{candidate_crc:08x}", "state": state}
+            row = {"stock_crc": f"0x{stock_crc:08x}", "candidate_crc": None if candidate_crc is None else f"0x{candidate_crc:08x}", "provider": provider, "state": state}
             if old is not None and old != row:
                 raise ValueError(f"inconsistent stock CRC for {name}")
             unique_imports[name] = row
@@ -105,6 +139,7 @@ def main():
         "stock_vermagic": dict(vermagic),
         "import_records": dict(symbol_state),
         "unique_import_symbols": dict(unique_states),
+        "stock_export_symbols": len(stock_exports),
         "critical_modules": sorted(
             (row for row in module_rows if row.get("missing", 0) or row.get("crc_mismatch", 0)),
             key=lambda row: (-(row.get("missing", 0) + row.get("crc_mismatch", 0)), row["path"]),
