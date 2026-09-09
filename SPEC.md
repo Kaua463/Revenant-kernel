@@ -46,6 +46,8 @@ V21 | Fixes preserve stock ABI or rebuild exact dependent module set; forced mod
 V22 | New audit workflow absent from default branch ! narrow push trigger on `dyperos-3.0.304`; manual dispatch alone forbidden for initial run.
 V23 | Annotated source tag ! pin+validate tag object and peeled commit separately before build.
 V24 | ABI-audit build ! finish within runner cap; thin LTO allowed because MODVERSIONS CRC derives declarations/config, while final release retains production LTO validation.
+V25 | Final pinned KSU/SUSFS compatibility fixes apply with zero fuzz after exact audited normalization; any unexpected reject, duplicate hook/include, or ignored patch blocks build.
+V26 | Clean-room validation uses an independent checkout and fail-fast shell; success marker is emitted only after the full integration command returns zero.
 
 ## §T
 
@@ -97,4 +99,9 @@ V24 | ABI-audit build ! finish within runner cap; thin LTO allowed because MODVE
 | B20 | Initial ABI workflow dispatch returned HTTP 404 | GitHub exposes `workflow_dispatch` only after workflow exists on default branch | V22 adds narrow initial push trigger |
 | B21 | Baseline source gate rejected correct `android15-6.6.77_r00` checkout | Gate compared annotated-tag object hash against peeled commit hash | V23 validates both identities |
 | B22 | Full-LTO ABI baseline cancelled after 29 minutes | Hosted runner terminated long link near execution cap | V24 uses thin LTO for ABI control build |
-| B23 | SUSFS v2.2.0 patch rejected many KernelSU Next v3.3.0 hunks | SUSFS patch and KSU release evolved on different source layouts | V5 pins compatible KSUN 33201 + SUSFS v2.2.0 + dedicated fix-set tuple |
+| B23 | SUSFS v2.2.0 patch rejected many KernelSU Next v3.3.0 hunks | SUSFS patch and KSU release evolved on different source layouts | V5 pins compatible post-v3.3 KSUN 33239 + SUSFS v2.2.0 + dedicated fix-set tuple |
+| B24 | Pinned KSUN/SUSFS integration passed macOS patch but failed before Actions compilation | BSD patch and GNU patch handled two already-present `init.c` hunks differently | V25 reproduces GNU behavior and canonicalizes those exact lines before strict fixes |
+| B25 | Initially pinned SUSFS SHA lacked the Android 15/6.6 kernel patch | WildKernels provenance named an equivalent Android 16/6.12 cherry-pick instead of the same change on the 6.6 branch | V5 pins the verified 6.6 sibling commit and checks branch-specific patch presence before integration |
+| B26 | SUSFS 6.6 patch left three rejects on exact ACK 6.6.77 | Patch was authored against a later 6.6 point release with different include and padded-VMA context | V25 permits only three exact audited adaptations and rejects any changed reject set |
+| B27 | Post-v3.3 KSU kernel pin could be paired with an incompatible manager | Kernel and manager may evolve their UAPI independently | V5 gates ancestry, identical v3.3 UAPI tree/native bridge, and manager minimum kernel version |
+| B28 | First local clean-room command printed PASS after its shared clone failed | Partial/promisor Git repository could not serve a shared clone, and the outer diagnostic shell was not fail-fast | V26 requires independent checkout plus `set -euo pipefail` before any success marker |

@@ -3,11 +3,18 @@ set -eu
 
 script=scripts/integrate-ksun-susfs-6.6.77.sh
 fragment=configs/rodin-6.6.77-ksun-susfs.fragment
-grep -q '30802e7260e2387176b9301377e88fc6fb0356b7' "$script"
-grep -q 'b03e1a9da3d24eea766b48871c71a6aed9ac98a6' "$script"
-grep -q '35fac8ee31035fb73a8b9301b50c2bdb4ff7feb7' "$script"
+grep -q '234f6e040fcbca18b16d2398e1aa225712ec99ad' "$script"
+grep -q 'be7b7ef49a1e1b189c3abf00eacaa7ebdb4168c1' "$script"
+grep -q 'cd63f371d91fb7fc32014c75728fbb9b686d9ae9' "$script"
 grep -q -- '--fuzz=0' "$script"
-! grep -Eq 'KMI bypass|force load|MODULE_FORCE_LOAD' "$script" "$fragment"
+grep -q 'already-audited lines' "$script"
+grep -q 'susfs_open_redirect_spoof_show_map_vma_srcu' "$script"
+if grep -Eq '\|\|[[:space:]]*true|MODULE_FORCE_LOAD' "$script" "$fragment"; then
+  exit 1
+fi
+if grep -Eq 'KMI bypass|force load|MODULE_FORCE_LOAD' "$script" "$fragment"; then
+  exit 1
+fi
 grep -qx 'CONFIG_KSU=y' "$fragment"
 grep -qx 'CONFIG_KSU_SUSFS=y' "$fragment"
 grep -qx '# CONFIG_KSU_SUSFS_ENABLE_LOG is not set' "$fragment"

@@ -22,9 +22,12 @@ env:
   KMI_TAG: android15-6.6.77_r00
   KMI_TAG_OBJECT: 79d26ca363880c3c6f7841045e46427bee6c3c3b
   KMI_COMMIT: f7ebe251035c0d15ff90c6a0a320697932785fad
-  KSU_COMMIT: 30802e7260e2387176b9301377e88fc6fb0356b7
-  SUSFS_COMMIT: b03e1a9da3d24eea766b48871c71a6aed9ac98a6
-  SUSFS_FIX_COMMIT: 35fac8ee31035fb73a8b9301b50c2bdb4ff7feb7
+  KSU_COMMIT: 234f6e040fcbca18b16d2398e1aa225712ec99ad
+  KSU_V330_COMMIT: 3b18216f71df189ab3d1b1ce0bdb21be1268e771
+  KSU_V330_UAPI_TREE: fc98ae0140c80815260ecaf86ddb6ef06ad29863
+  KSU_V330_NATIVES_BLOB: 0fafa35dc7d31ef4c8add60c3f8d98a090027544
+  SUSFS_COMMIT: be7b7ef49a1e1b189c3abf00eacaa7ebdb4168c1
+  SUSFS_FIX_COMMIT: cd63f371d91fb7fc32014c75728fbb9b686d9ae9
 
 jobs:
   candidate:
@@ -66,6 +69,12 @@ jobs:
           test "$(git -C common rev-parse HEAD)" = "$KMI_COMMIT"
           git clone --filter=blob:none https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
           git -C KernelSU-Next checkout --detach "$KSU_COMMIT"
+          test "$(git -C KernelSU-Next rev-parse HEAD)" = "$KSU_COMMIT"
+          git -C KernelSU-Next merge-base --is-ancestor "$KSU_V330_COMMIT" "$KSU_COMMIT"
+          test "$(git -C KernelSU-Next rev-parse "$KSU_COMMIT:uapi")" = "$KSU_V330_UAPI_TREE"
+          test "$(git -C KernelSU-Next rev-parse "$KSU_COMMIT:manager/app/src/main/java/com/rifsxd/ksunext/Natives.kt")" = "$KSU_V330_NATIVES_BLOB"
+          grep -q 'const val MINIMAL_SUPPORTED_KERNEL = 33188' \
+            KernelSU-Next/manager/app/src/main/java/com/rifsxd/ksunext/Natives.kt
           git clone --filter=blob:none --branch gki-android15-6.6 \
             https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
           git -C susfs4ksu checkout --detach "$SUSFS_COMMIT"
@@ -114,7 +123,8 @@ jobs:
           {
             echo "KMI_COMMIT=$KMI_COMMIT"
             echo "KSU_COMMIT=$KSU_COMMIT"
-            echo "KSU_VERSION=33201"
+            echo "KSU_VERSION=33239"
+            echo "KSU_MANAGER_COMPAT=v3.3.0-uapi-identical"
             echo "SUSFS_COMMIT=$SUSFS_COMMIT"
             echo "SUSFS_VERSION=v2.2.0"
             echo "SUSFS_FIX_COMMIT=$SUSFS_FIX_COMMIT"
@@ -127,7 +137,7 @@ jobs:
       - name: Upload candidate ABI evidence
         uses: actions/upload-artifact@v4
         with:
-          name: rodin-6.6.77-ksun33201-susfs2.2-abi-${{ github.run_number }}
+          name: rodin-6.6.77-ksun33239-susfs2.2-abi-${{ github.run_number }}
           path: dist
           if-no-files-found: error
           retention-days: 14
