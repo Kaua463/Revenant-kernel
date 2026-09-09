@@ -1,4 +1,4 @@
-# Immutable inputs for the complete rodin/MT6899 kernel port.
+# Immutable inputs for the complete rodin/MT6899 6.6.102 network build.
 RODIN_SOURCE_URL=https://gitlab.com/DevUknown/kernel-xiaomi-rodin-rebased-with-latest-ack-and-modules.git
 RODIN_SOURCE_BRANCH=rodin-gpu
 RODIN_SOURCE_COMMIT=25920d57fb543470803749031b506c0d23d341d7
@@ -6,17 +6,8 @@ RODIN_SOURCE_VERSION=6.6.102
 # Preserve the complete upstream rodin-gpu baseline, including its existing mods.
 RODIN_CLEAN_COMMIT=25920d57fb543470803749031b506c0d23d341d7
 
-ANDROID_LTS_URL=https://android.googlesource.com/kernel/common
-ANDROID_LTS_BRANCH=android15-6.6-lts
-ANDROID_LTS_COMMIT=d8db4cf8c94dfd1f15b856d1ed22e355fddf1ce6
-ANDROID_LTS_VERSION=6.6.142
-
 CLANG_SOURCE_URL=https://gitlab.com/jjpprrrr/prelude-clang.git
 CLANG_COMMIT=ac8fce34dc0f6918672100d7a6e867a66b8afa8f
-
-LINUX_STABLE_URL=https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
-LINUX_STABLE_TAG=v6.6.156
-LINUX_STABLE_COMMIT=8b73de7da85fde281a385e0b26eda9bffd3ca477
 
 BBR_SOURCE_URL=https://github.com/google/bbr.git
 BBR_SOURCE_BRANCH=v3

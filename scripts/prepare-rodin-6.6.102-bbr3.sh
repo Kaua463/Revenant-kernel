@@ -6,44 +6,12 @@ source "$repo_root/configs/rodin-source.lock"
 
 test "$(git rev-parse HEAD)" = "$RODIN_CLEAN_COMMIT"
 test -z "$(git status --porcelain)"
-git config user.name 'Revenant LTS Port'
+git config user.name 'Revenant Network Build'
 git config user.email 'actions@users.noreply.github.com'
-
-# ACK first: it contains Android-specific fixes through Linux 6.6.142. Prefer
-# the maintained ACK side on common-code conflicts, but retain rodin's clk
-# Makefile because the MT6899 modules provide the MediaTek clock drivers.
-git merge --no-ff --no-commit -X theirs "$ANDROID_LTS_COMMIT" || true
-test -f .git/MERGE_HEAD
-git diff --name-only --diff-filter=U | sort > "$repo_root/ack-unmerged.txt"
-diff -u "$repo_root/configs/ack-6.6.142-delete-conflicts.txt" "$repo_root/ack-unmerged.txt"
-git add -A
-git restore --source="$RODIN_CLEAN_COMMIT" --staged --worktree drivers/clk/Makefile
-test -z "$(git diff --name-only --diff-filter=U)"
-git commit -m "Merge Android 15 ACK LTS through 6.6.142"
-
-# Linux stable supplies 6.6.143..6.6.156. On conflicts, retain ACK's Android
-# adaptation; every conflict is captured in the merge log and build evidence.
-git merge --no-ff --no-commit -X ours "$LINUX_STABLE_COMMIT" || true
-test -f .git/MERGE_HEAD
-git diff --name-only --diff-filter=U | sort > "$repo_root/stable-unmerged.txt"
-diff -u "$repo_root/configs/stable-6.6.156-delete-conflicts.txt" "$repo_root/stable-unmerged.txt"
-while IFS= read -r path; do
-    git rm -- "$path"
-done < "$repo_root/configs/stable-6.6.156-delete-conflicts.txt"
-test -z "$(git diff --name-only --diff-filter=U)"
-git commit -m "Merge Linux stable through 6.6.156"
-
-# Recursive merge resolution can combine old Android/vendor sides with only
-# part of a later stable change. Keep each proven coupled implementation set
-# at the exact 6.6.156 revision instead of masking compile errors piecemeal.
-while IFS= read -r source_file; do
-    git restore --source="$LINUX_STABLE_COMMIT" --staged --worktree -- "$source_file"
-done < "$repo_root/configs/stable-6.6.156-consistency-files.txt"
-git commit -m "Restore coupled Linux 6.6.156 implementation sets"
 
 test "$(sed -n 's/^VERSION = //p' Makefile)" = 6
 test "$(sed -n 's/^PATCHLEVEL = //p' Makefile)" = 6
-test "$(sed -n 's/^SUBLEVEL = //p' Makefile)" = 156
+test "$(sed -n 's/^SUBLEVEL = //p' Makefile)" = 102
 
 # Apply the complete official Google BBRv3 series rather than copying one file.
 # Three commits conflict only because Linux 6.13 reorganized tcp_sock around

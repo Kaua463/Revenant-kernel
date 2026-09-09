@@ -2,12 +2,12 @@
 
 ## §G
 
-G1 | Port the complete POCO X7 Pro `rodin`/MT6899 kernel+module tree to Linux 6.6.156 LTS for DyperOS 3.0.304, with KernelSU Next and one measured network feature, producing validated recoverable artifacts.
+G1 | Build the complete pinned POCO X7 Pro `rodin`/MT6899 Linux 6.6.102 kernel+module tree for DyperOS 3.0.304, preserving existing mods and adding KernelSU Next plus the requested network set.
 
 ## §C
 
 C1 | ROM reference boot SHA-256=`3c555f2f5dda7b6085dd38a2869d23ffe680c05d5bcc59625885b726690a00ce`.
-C2 | ROM kernel=`6.6.77-android15-8-gca30f3b4bef6-abogki440974771-4k`; port source must include the matching `mediatek/mt6899` device-module tree and advance within Android `android15-6.6` to Linux 6.6.156 LTS.
+C2 | ROM kernel=`6.6.77-android15-8-gca30f3b4bef6-abogki440974771-4k`; source is pinned complete `rodin-gpu` 6.6.102 with `mediatek/mt6899` modules. No ACK/stable version uplift.
 C3 | boot header v4; 64 MiB image; kernel in `boot`; boot ramdisk size 0; device uses 4 KiB pages.
 C4 | Device access is limited to kernel/recovery facts and explicit staged validation; no personal-file inspection. No flash until offline gates pass and exact rollback images are verified.
 C5 | Preserve the complete pinned `rodin-gpu` baseline and its existing mods. Add no new unrelated tweak; replace/extend only congestion-control and queueing with pinned Google BBRv3 + TCP pacing + `fq`, retaining BBRv1 for A/B fallback. SuSFS remains excluded.
@@ -23,7 +23,7 @@ I4 | GitHub Actions artifacts → `Image`, modules, boot/vendor_dlkm/dtbo candid
 ## §V
 
 V1 | Base contains the complete rodin `mediatek/mt6899` kernel-module sources; source origins and immutable commits are recorded.
-V2 | Linux 6.6.y updates apply incrementally through 6.6.156 without replacing MediaTek drivers/config; every conflict is reviewed and recorded.
+V2 | Kernel stays at pinned rodin 6.6.102; active workflow fetches no newer ACK/stable revision and preserves MediaTek drivers/config plus existing baseline mods.
 V3 | Kernel and every shipped `.ko` are built together with one toolchain/config; release/vermagic, modversions, symbol CRCs, dependencies, and unresolved symbols pass gates.
 V4 | No global bypass of KMI protected symbols, CRC, vermagic, module signatures, or ABI checks is present.
 V5 | KernelSU-Next release commit/version and manager signer identity are pinned and validated; SuSFS excluded initially.
@@ -49,9 +49,9 @@ V15 | Artifact checksum manifests use artifact-relative paths, exclude themselve
 | T5 | Dispatch GitHub Actions and follow build through completion | done |
 | T6 | Inspect produced kernel/artifacts and report flash/rollback guidance | done |
 | T7 | Import and provenance-pin complete rodin/MT6899 source and build inputs | x |
-| T8 | Establish reproducible baseline build for kernel + all device modules | ~ |
-| T9 | Incrementally port Android 15 kernel to Linux 6.6.156 LTS | . |
-| T10 | Integrate pinned KernelSU Next and BBR/fq-only fragment | . |
+| T8 | Establish reproducible baseline build for kernel + all device modules | x |
+| T9 | Remove 6.6.156 uplift from active build; freeze complete rodin 6.6.102 baseline | ~ |
+| T10 | Integrate pinned KernelSU Next and BBRv3/pacing/fq-only delta | . |
 | T11 | Build safe installer, complete rollback package, and offline validation gates | . |
 | T12 | Run GitHub Actions; audit artifacts, ABI, modules, images and manifests | . |
 | T13 | Present offline evidence; perform explicit staged hardware validation only after gates pass | . |
@@ -71,3 +71,4 @@ V15 | Artifact checksum manifests use artifact-relative paths, exclude themselve
 | B9 | Build step appeared successful but produced no `modules.order` | `tee` hid kbuild's nonzero exit; `-X theirs` replaced 6.6 `tcp_sock` layout with incompatible 6.13 layout | Use `pipefail`; resolve three BBR layout conflicts semantically while retaining 6.6 layout and consuming existing padding bits |
 | B10 | Post-port compile found split revisions in certs, BPF verifier, and seq_buf/trace | Recursive merge resolution retained one side of coupled stable changes while accepting dependent hunks from the other | Restore each proven coupled implementation set from the exact pinned stable 6.6.156 tree and keep the full build as gate |
 | B11 | Fail-fast compilation exposed one independent port error per remote run | Normal kbuild stops dependent directory traversal after the first failed object | Run one temporary `make -k` diagnostic sweep, batch-review all unique failures, then restore fail-fast mode for the final build |
+| B12 | 6.6.156 diagnostic sweep produced 628 errors across core and MediaTek subsystems | Uplift combined incompatible Android/vendor and stable interfaces, violating the requested network-only scope | Freeze proven rodin 6.6.102 baseline; reject any active ACK/stable uplift before network integration |

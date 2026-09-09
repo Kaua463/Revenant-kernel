@@ -1,18 +1,15 @@
-name: Build rodin 6.6.156 KSU BBRv3
+name: Audit rodin 6.6.102 KSU BBRv3
 
 on:
   workflow_dispatch:
   push:
     branches: [dyperos-3.0.304]
     paths:
-      - .github/workflows/build-rodin-6.6.156-bbr3.yml
+      - .github/workflows/build-rodin-6.6.102-bbr3.yml
       - configs/rodin-source.lock
       - configs/bbr-v3.commits
-      - configs/ack-6.6.142-delete-conflicts.txt
-      - configs/stable-6.6.156-delete-conflicts.txt
-      - configs/stable-6.6.156-consistency-files.txt
       - configs/rodin-ksun-bbr3.fragment
-      - scripts/port-rodin-6.6.156.sh
+      - scripts/prepare-rodin-6.6.102-bbr3.sh
       - scripts/validate-source-lock.sh
 
 permissions:
@@ -46,18 +43,10 @@ jobs:
           set +a
           sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' configs/rodin-source.lock >> "$GITHUB_ENV"
 
-      - name: Fetch complete rodin and upstream histories
+      - name: Fetch complete rodin and pinned BBR history
         run: |
           git clone --filter=blob:none --no-checkout "$RODIN_SOURCE_URL" source
           git -C source checkout --detach "$RODIN_CLEAN_COMMIT"
-          git -C source remote add ack "$ANDROID_LTS_URL"
-          git -C source fetch --filter=blob:none --no-tags ack \
-            "$ANDROID_LTS_BRANCH:refs/remotes/ack/$ANDROID_LTS_BRANCH"
-          test "$(git -C source rev-parse refs/remotes/ack/$ANDROID_LTS_BRANCH)" = "$ANDROID_LTS_COMMIT"
-          git -C source remote add stable "$LINUX_STABLE_URL"
-          git -C source fetch --no-tags stable \
-            "refs/tags/$LINUX_STABLE_TAG:refs/tags/$LINUX_STABLE_TAG"
-          test "$(git -C source rev-parse "$LINUX_STABLE_TAG^{commit}")" = "$LINUX_STABLE_COMMIT"
           git -C source remote add google-bbr "$BBR_SOURCE_URL"
           git -C source fetch --filter=blob:none --no-tags google-bbr \
             "$BBR_SOURCE_BRANCH:refs/remotes/google-bbr/$BBR_SOURCE_BRANCH"
@@ -71,11 +60,11 @@ jobs:
           git -C KernelSU-Next checkout --detach "$KSU_COMMIT"
           test "$(git -C KernelSU-Next describe --tags --always)" = "$KSU_VERSION_TAG"
 
-      - name: Port ACK, stable and official BBRv3 series
+      - name: Preserve rodin 6.6.102 and apply official BBRv3 series
         run: |
-          chmod +x scripts/port-rodin-6.6.156.sh
+          chmod +x scripts/prepare-rodin-6.6.102-bbr3.sh
           cd source
-          REVENANT_REPO_ROOT="$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/scripts/port-rodin-6.6.156.sh"
+          REVENANT_REPO_ROOT="$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/scripts/prepare-rodin-6.6.102-bbr3.sh"
 
       - name: Configure KSU, BBRv3, pacing and fq
         run: |
@@ -109,7 +98,7 @@ jobs:
           test -s out/Module.symvers
           test -s out/arch/arm64/boot/Image
           strings out/arch/arm64/boot/Image | grep -m1 '^Linux version' | tee kernel-banner.txt
-          grep -q '6.6.156' kernel-banner.txt
+          grep -q '6.6.102' kernel-banner.txt
           test -s out/net/ipv4/tcp_bbr.o
           llvm-nm out/net/ipv4/tcp_bbr.o | grep -q ' bbr_register$'
           test -f modules-root/lib/modules/*/kernel/net/ipv4/tcp_bbr1.ko
@@ -135,7 +124,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rodin-6.6.156-ksun-bbr3-${{ github.run_number }}
+          name: rodin-6.6.102-ksun-bbr3-audit-${{ github.run_number }}
           path: dist
           if-no-files-found: warn
           retention-days: 14
