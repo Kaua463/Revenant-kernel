@@ -38,6 +38,7 @@ V13 | Offline gate validates Android boot header v4, 4 KiB pages, 64 MiB boot li
 V14 | Hardware gate proves boot completion plus Wi-Fi, Bluetooth, GPU, audio, camera, modem, sensors, storage and BBR availability; panic/watchdog/pstore evidence fails release.
 V15 | Artifact checksum manifests use artifact-relative paths, exclude themselves, and pass an immediate clean-room verification before upload.
 V16 | BBRv3 integration matches rodin's native two-argument `cong_control` and `BTF_SET8` API while preserving rodin's generic `bpf_tcp_ca.c` byte-for-byte before any final build.
+V17 | BBRv1 fallback is built-in while it calls rodin-internal non-exported TCP helpers; config and artifacts reject a `tcp_bbr1.ko` module boundary.
 
 ## §T
 
@@ -79,3 +80,4 @@ V16 | BBRv3 integration matches rodin's native two-argument `cong_control` and `
 | B16 | Audit rerun stopped before source fetch with APT hash mismatch | GitHub's Ubuntu image exposed a stale Google Chrome package index unrelated to kernel dependencies | Remove that extraneous runner source before refreshing required Ubuntu package indexes |
 | B17 | Removing `/etc/apt/sources.list.d/google-chrome.list` did not isolate the stale index | Hosted-runner source filenames vary and the Chrome entry was stored under another supported extension | Discover Chrome source files by repository URL, remove every match, and assert no reference remains before APT refresh |
 | B18 | Third frozen 6.6.102 sweep reported 12 unused BPF callback stubs | Partially adapting Google's generic CFI struct-ops rewrite removed its table but left all callbacks, while BBR itself does not require that rewrite | Preserve rodin's proven `bpf_tcp_ca.c` byte-for-byte and restrict compatibility edits to the two BBR algorithm files |
+| B19 | Fourth frozen 6.6.102 sweep compiled every object but failed modpost on `tcp_tso_autosize` from `tcp_bbr1.ko` | BBRv1 was modular although it calls a TCP core helper intentionally not exported by rodin | V17 keeps BBRv1 built-in and gates both its object and absence of a fallback module |

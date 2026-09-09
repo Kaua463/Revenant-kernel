@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root=${REVENANT_REPO_ROOT:?set REVENANT_REPO_ROOT}
+# shellcheck source=/dev/null
 source "$repo_root/configs/rodin-source.lock"
 
 test "$(git rev-parse HEAD)" = "$RODIN_CLEAN_COMMIT"
@@ -76,8 +77,8 @@ sed -i 's/^BTF_KFUNCS_END(tcp_bbr1_check_kfunc_ids)$/BTF_SET8_END(tcp_bbr1_check
 test "$(grep -c '^__bpf_kfunc static void bbr_main(struct sock \*sk,$' net/ipv4/tcp_bbr.c)" = 1
 test "$(grep -c '^__bpf_kfunc static void bbr1_main(struct sock \*sk,$' net/ipv4/tcp_bbr1.c)" = 1
 test "$(grep -c '^struct bpf_struct_ops bpf_tcp_congestion_ops = {$' net/ipv4/bpf_tcp_ca.c)" = 1
-! grep -q '__bpf_ops_tcp_congestion_ops' net/ipv4/bpf_tcp_ca.c
-! grep -q 'BTF_KFUNCS_.*tcp_bbr1_check_kfunc_ids' net/ipv4/tcp_bbr1.c
+if grep -q '__bpf_ops_tcp_congestion_ops' net/ipv4/bpf_tcp_ca.c; then exit 1; fi
+if grep -q 'BTF_KFUNCS_.*tcp_bbr1_check_kfunc_ids' net/ipv4/tcp_bbr1.c; then exit 1; fi
 grep -q '^BTF_SET8_START(tcp_bbr1_check_kfunc_ids)$' net/ipv4/tcp_bbr1.c
 grep -q '^BTF_SET8_END(tcp_bbr1_check_kfunc_ids)$' net/ipv4/tcp_bbr1.c
 
@@ -85,8 +86,12 @@ grep -q '^BTF_SET8_END(tcp_bbr1_check_kfunc_ids)$' net/ipv4/tcp_bbr1.c
 # release commit, exactly as kbuild expects.
 test "$(git -C ../KernelSU-Next rev-parse HEAD)" = "$KSU_COMMIT"
 ln -s ../../KernelSU-Next/kernel drivers/kernelsu
-grep -q 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile || \
+# The dollar expression is literal kbuild syntax, not a shell expansion.
+# shellcheck disable=SC2016
+if ! grep -q 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile; then
+    # shellcheck disable=SC2016
     printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+fi
 grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || \
     sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 

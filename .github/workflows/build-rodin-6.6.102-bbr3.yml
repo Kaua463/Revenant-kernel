@@ -1,4 +1,4 @@
-name: Audit rodin 6.6.102 KSU BBRv3
+name: Build rodin 6.6.102 KSU BBRv3
 
 on:
   workflow_dispatch:
@@ -78,19 +78,24 @@ jobs:
           make -C source O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 rodin_defconfig
           source/scripts/kconfig/merge_config.sh -m -O out out/.config configs/rodin-ksun-bbr3.fragment
           make -C source O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
-          for symbol in KSU NET_SCHED NET_SCH_FQ NET_SCH_DEFAULT DEFAULT_FQ TCP_CONG_BBR DEFAULT_BBR; do
+          for symbol in KSU NET_SCHED NET_SCH_FQ NET_SCH_DEFAULT DEFAULT_FQ TCP_CONG_BBR TCP_CONG_BBR1 DEFAULT_BBR; do
             test "$(source/scripts/config --file out/.config -s "$symbol")" = y
           done
-          test "$(source/scripts/config --file out/.config -s TCP_CONG_BBR1)" = m
           test "$(source/scripts/config --file out/.config --state KSU_SUSFS)" = undef
           grep -qx 'CONFIG_DEFAULT_NET_SCH="fq"' out/.config
           grep -qx 'CONFIG_DEFAULT_TCP_CONG="bbr"' out/.config
+          # BBR1 calls internal TCP helpers and must remain built-in unless all
+          # such helpers become explicitly exported by the rodin kernel.
+          if grep -q 'tcp_tso_autosize(' source/net/ipv4/tcp_bbr1.c; then
+            grep -qx 'CONFIG_TCP_CONG_BBR1=y' out/.config
+            if grep -q 'EXPORT_SYMBOL.*(tcp_tso_autosize)' source/net/ipv4/tcp_output.c; then exit 1; fi
+          fi
 
-      - name: Diagnostic compile sweep (collect all independent failures)
+      - name: Compile kernel and modules (fail-fast)
         run: |
           set -o pipefail
           export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
-          make -C source -k -j2 O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+          make -C source -j2 O="$GITHUB_WORKSPACE/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             Image Image.gz modules dtbs 2>&1 | tee build.log
 
       - name: Install and validate modules
@@ -107,7 +112,9 @@ jobs:
           grep -q '6.6.102' kernel-banner.txt
           test -s out/net/ipv4/tcp_bbr.o
           llvm-nm out/net/ipv4/tcp_bbr.o | grep -q ' bbr_register$'
-          test -f modules-root/lib/modules/*/kernel/net/ipv4/tcp_bbr1.ko
+          test -s out/net/ipv4/tcp_bbr1.o
+          llvm-nm out/net/ipv4/tcp_bbr1.o | grep -q ' bbr_register$'
+          test -z "$(find modules-root -type f -name 'tcp_bbr1.ko' -print -quit)"
           if grep -R -n -E 'load anyway|force load|KMI bypass' source/kernel/module; then exit 1; fi
 
       - name: Assemble evidence
@@ -130,7 +137,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rodin-6.6.102-ksun-bbr3-audit-${{ github.run_number }}
+          name: rodin-6.6.102-ksun-bbr3-${{ github.run_number }}
           path: dist
           if-no-files-found: warn
           retention-days: 14
