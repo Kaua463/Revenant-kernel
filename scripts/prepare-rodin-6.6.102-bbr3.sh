@@ -74,7 +74,7 @@ sed -i 's/^static struct bpf_struct_ops bpf_tcp_congestion_ops =/struct bpf_stru
 test "$(grep -c '^__bpf_kfunc static void bbr_main(struct sock \*sk,$' net/ipv4/tcp_bbr.c)" = 1
 test "$(grep -c '^__bpf_kfunc static void bbr1_main(struct sock \*sk,$' net/ipv4/tcp_bbr1.c)" = 1
 test "$(grep -c '^static void bpf_tcp_ca_cong_control(struct sock \*sk,$' net/ipv4/bpf_tcp_ca.c)" = 1
-test "$(grep -c '^struct bpf_struct_ops bpf_tcp_congestion_ops =$' net/ipv4/bpf_tcp_ca.c)" = 1
+test "$(grep -c '^struct bpf_struct_ops bpf_tcp_congestion_ops = {$' net/ipv4/bpf_tcp_ca.c)" = 1
 ! grep -q 'BTF_KFUNCS_.*tcp_bbr1_check_kfunc_ids' net/ipv4/tcp_bbr1.c
 grep -q '^BTF_SET8_START(tcp_bbr1_check_kfunc_ids)$' net/ipv4/tcp_bbr1.c
 grep -q '^BTF_SET8_END(tcp_bbr1_check_kfunc_ids)$' net/ipv4/tcp_bbr1.c
