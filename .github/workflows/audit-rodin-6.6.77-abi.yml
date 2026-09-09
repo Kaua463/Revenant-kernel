@@ -18,7 +18,8 @@ concurrency:
 env:
   KMI_BRANCH: common-android15-6.6
   KMI_TAG: android15-6.6.77_r00
-  KMI_COMMIT: 79d26ca36388
+  KMI_TAG_OBJECT: 79d26ca363880c3c6f7841045e46427bee6c3c3b
+  KMI_COMMIT: f7ebe251035c0d15ff90c6a0a320697932785fad
 
 jobs:
   baseline:
@@ -52,8 +53,9 @@ jobs:
           repo sync -c -j2 --no-tags --no-clone-bundle --fail-fast
           git -C common fetch https://android.googlesource.com/kernel/common.git \
             "refs/tags/$KMI_TAG:refs/tags/$KMI_TAG" --depth=1
+          test "$(git -C common rev-parse "refs/tags/$KMI_TAG")" = "$KMI_TAG_OBJECT"
           git -C common checkout --detach "$KMI_TAG"
-          test "$(git -C common rev-parse --short=12 HEAD)" = "$KMI_COMMIT"
+          test "$(git -C common rev-parse HEAD)" = "$KMI_COMMIT"
           grep -qx 'KMI_GENERATION=8' common/build.config.common
 
       - name: Build untouched 4K GKI baseline
