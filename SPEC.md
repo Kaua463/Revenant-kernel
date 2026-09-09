@@ -37,6 +37,7 @@ V12 | Installer validates device, ROM/kernel family, slot, snapshot state, parti
 V13 | Offline gate validates Android boot header v4, 4 KiB pages, 64 MiB boot limit, DTB/DTBO structure, vendor_dlkm filesystem/SELinux metadata, archive integrity, and exact written-file manifest.
 V14 | Hardware gate proves boot completion plus Wi-Fi, Bluetooth, GPU, audio, camera, modem, sensors, storage and BBR availability; panic/watchdog/pstore evidence fails release.
 V15 | Artifact checksum manifests use artifact-relative paths, exclude themselves, and pass an immediate clean-room verification before upload.
+V16 | BBRv3 integration matches rodin's native two-argument `cong_control`, external BPF struct-ops definition, and `BTF_SET8` API before any final build.
 
 ## §T
 
@@ -72,3 +73,4 @@ V15 | Artifact checksum manifests use artifact-relative paths, exclude themselve
 | B10 | Post-port compile found split revisions in certs, BPF verifier, and seq_buf/trace | Recursive merge resolution retained one side of coupled stable changes while accepting dependent hunks from the other | Restore each proven coupled implementation set from the exact pinned stable 6.6.156 tree and keep the full build as gate |
 | B11 | Fail-fast compilation exposed one independent port error per remote run | Normal kbuild stops dependent directory traversal after the first failed object | Run one temporary `make -k` diagnostic sweep, batch-review all unique failures, then restore fail-fast mode for the final build |
 | B12 | 6.6.156 diagnostic sweep produced 628 errors across core and MediaTek subsystems | Uplift combined incompatible Android/vendor and stable interfaces, violating the requested network-only scope | Freeze proven rodin 6.6.102 baseline; reject any active ACK/stable uplift before network integration |
+| B13 | Frozen 6.6.102 diagnostic sweep found six errors, all in BBR/BPF objects | Google's BBR v3 history uses a four-argument congestion callback, local-only struct-ops declaration, and newer `BTF_KFUNCS` spelling than rodin 6.6.102 | V16 adapts and asserts the three native APIs as one batch before rerunning the full diagnostic sweep |

@@ -57,6 +57,28 @@ while IFS= read -r commit; do
     esac
 done < "$repo_root/configs/bbr-v3.commits"
 
+# Google's v3 branch currently targets the older four-argument congestion
+# control callback and a newer spelling for the BTF kfunc-set macros.  Rodin's
+# Android 6.6.102 tree uses the upstream two-argument callback and BTF_SET8.
+# The removed ack/flag parameters are not referenced by either BBR algorithm.
+perl -0pi -e 's/static void bbr_main\(struct sock \*sk, u32 ack, int flag,\n\s+const struct rate_sample \*rs\)/static void bbr_main(struct sock *sk,\n\t\t\t const struct rate_sample *rs)/' net/ipv4/tcp_bbr.c
+perl -0pi -e 's/static void bbr1_main\(struct sock \*sk, u32 ack, int flag,\n\s+const struct rate_sample \*rs\)/static void bbr1_main(struct sock *sk,\n\t\t\t  const struct rate_sample *rs)/' net/ipv4/tcp_bbr1.c
+perl -0pi -e 's/static void bpf_tcp_ca_cong_control\(struct sock \*sk, u32 ack, int flag,\n\s+const struct rate_sample \*rs\)/static void bpf_tcp_ca_cong_control(struct sock *sk,\n\t\t\t\t    const struct rate_sample *rs)/' net/ipv4/bpf_tcp_ca.c
+sed -i 's/^BTF_KFUNCS_START(tcp_bbr1_check_kfunc_ids)$/BTF_SET8_START(tcp_bbr1_check_kfunc_ids)/' net/ipv4/tcp_bbr1.c
+sed -i 's/^BTF_KFUNCS_END(tcp_bbr1_check_kfunc_ids)$/BTF_SET8_END(tcp_bbr1_check_kfunc_ids)/' net/ipv4/tcp_bbr1.c
+
+# The rodin BPF struct-ops implementation has an extern forward declaration;
+# retain its externally visible definition after taking Google's newer body.
+sed -i 's/^static struct bpf_struct_ops bpf_tcp_congestion_ops =/struct bpf_struct_ops bpf_tcp_congestion_ops =/' net/ipv4/bpf_tcp_ca.c
+
+test "$(grep -c '^__bpf_kfunc static void bbr_main(struct sock \*sk,$' net/ipv4/tcp_bbr.c)" = 1
+test "$(grep -c '^__bpf_kfunc static void bbr1_main(struct sock \*sk,$' net/ipv4/tcp_bbr1.c)" = 1
+test "$(grep -c '^static void bpf_tcp_ca_cong_control(struct sock \*sk,$' net/ipv4/bpf_tcp_ca.c)" = 1
+test "$(grep -c '^struct bpf_struct_ops bpf_tcp_congestion_ops =$' net/ipv4/bpf_tcp_ca.c)" = 1
+! grep -q 'BTF_KFUNCS_.*tcp_bbr1_check_kfunc_ids' net/ipv4/tcp_bbr1.c
+grep -q '^BTF_SET8_START(tcp_bbr1_check_kfunc_ids)$' net/ipv4/tcp_bbr1.c
+grep -q '^BTF_SET8_END(tcp_bbr1_check_kfunc_ids)$' net/ipv4/tcp_bbr1.c
+
 # KernelSU Next is kept out of the source lockstep and symlinked at its pinned
 # release commit, exactly as kbuild expects.
 test "$(git -C ../KernelSU-Next rev-parse HEAD)" = "$KSU_COMMIT"
