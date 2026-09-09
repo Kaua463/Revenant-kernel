@@ -52,10 +52,10 @@ V17 | BBRv1 fallback is built-in while it calls rodin-internal non-exported TCP 
 | T6 | Inspect produced kernel/artifacts and report flash/rollback guidance | done |
 | T7 | Import and provenance-pin complete rodin/MT6899 source and build inputs | x |
 | T8 | Establish reproducible baseline build for kernel + all device modules | x |
-| T9 | Remove 6.6.156 uplift from active build; freeze complete rodin 6.6.102 baseline | ~ |
-| T10 | Integrate pinned KernelSU Next and BBRv3/pacing/fq-only delta | . |
+| T9 | Remove 6.6.156 uplift from active build; freeze complete rodin 6.6.102 baseline | x |
+| T10 | Integrate pinned KernelSU Next and BBRv3/pacing/fq-only delta | x |
 | T11 | Build safe installer, complete rollback package, and offline validation gates | . |
-| T12 | Run GitHub Actions; audit artifacts, ABI, modules, images and manifests | . |
+| T12 | Run GitHub Actions; audit artifacts, ABI, modules, images and manifests | x |
 | T13 | Present offline evidence; perform explicit staged hardware validation only after gates pass | . |
 
 ## §B
