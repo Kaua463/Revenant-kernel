@@ -43,6 +43,7 @@ V18 | SUSFS changes limited to upstream/pinned integration; no ABI/KMI/CRC/verma
 V19 | Root persists via current-slot `boot`; installer preserves ramdisk/DTB layout, validates rebuilt image, and emits hash-verified stock restore ZIP before flash ZIP.
 V20 | Port starts from exhaustive stock-vs-Revenant matrix: release/config, exported+required symbols, MODVERSIONS CRC, vermagic, module deps, namespaces, signatures, DTB/DTBO, boot layout; unresolved critical delta blocks installer.
 V21 | Fixes preserve stock ABI or rebuild exact dependent module set; forced module loading and KMI/protected-symbol bypass remain forbidden.
+V22 | New audit workflow absent from default branch ! narrow push trigger on `dyperos-3.0.304`; manual dispatch alone forbidden for initial run.
 
 ## §T
 
@@ -91,3 +92,4 @@ V21 | Fixes preserve stock ABI or rebuild exact dependent module set; forced mod
 | B17 | Removing `/etc/apt/sources.list.d/google-chrome.list` did not isolate the stale index | Hosted-runner source filenames vary and the Chrome entry was stored under another supported extension | Discover Chrome source files by repository URL, remove every match, and assert no reference remains before APT refresh |
 | B18 | Third frozen 6.6.102 sweep reported 12 unused BPF callback stubs | Partially adapting Google's generic CFI struct-ops rewrite removed its table but left all callbacks, while BBR itself does not require that rewrite | Preserve rodin's proven `bpf_tcp_ca.c` byte-for-byte and restrict compatibility edits to the two BBR algorithm files |
 | B19 | Fourth frozen 6.6.102 sweep compiled every object but failed modpost on `tcp_tso_autosize` from `tcp_bbr1.ko` | BBRv1 was modular although it calls a TCP core helper intentionally not exported by rodin | V17 keeps BBRv1 built-in and gates both its object and absence of a fallback module |
+| B20 | Initial ABI workflow dispatch returned HTTP 404 | GitHub exposes `workflow_dispatch` only after workflow exists on default branch | V22 adds narrow initial push trigger |

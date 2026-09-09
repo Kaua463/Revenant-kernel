@@ -2,6 +2,11 @@ name: Audit rodin stock 6.6.77 ABI baseline
 
 on:
   workflow_dispatch:
+  push:
+    branches: [dyperos-3.0.304]
+    paths:
+      - .github/workflows/audit-rodin-6.6.77-abi.yml
+      - scripts/audit-rom-module-abi.py
 
 permissions:
   contents: read
