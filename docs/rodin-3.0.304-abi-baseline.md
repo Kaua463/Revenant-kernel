@@ -39,4 +39,16 @@ The ROM userspace is Android 16, while its kernel ABI branch is Android 15 GKI 6
 - Deterministic tracked ACK source delta SHA-256: `3cb6faaa3e9b98d02b953685f50f2af902f37ac61b6e9e06964ac1daac22667d`
 - Platform-independent 26-file content manifest SHA-256: `ceb50cf610affc7a7a671fb07568e5ec033e9d63ad12b7de1a51994f6c935fd2`
 
-This is integration evidence only. It does not become a flashable candidate until compilation, ABI comparison, boot-image validation, and the staged hardware gate pass.
+Final offline candidate evidence:
+
+- GitHub Actions run: `34438390462`, success
+- Kernel `Image` SHA-256: `3d632d2d7c89e91dd6d19289eb527c1130caf4d2dcf6ed245a233df45ae57417`
+- Embedded release: exact stock `6.6.77-android15-8-gca30f3b4bef6-abogki440974771-4k`
+- Embedded KernelSU metadata: `33239`, `v3.3.0`; fallback `1`/`v0.0.1` absent
+- Candidate-vs-control module audit: 352 stock modules, 21,125 matching import records, 4,513 matching unique kernel symbols, zero changed symbol rows
+- The 431 unresolved unique names and 771 records are identical in candidate and control and belong to the private module-to-module dependency closure
+- OrangeFox installer SHA-256: `cfb2003a4afba45ec31be6164d216814da611624019272546e5271288530d488`
+- OrangeFox stock-kernel restore SHA-256: `1cfafdb9e12a7972854d2a002123a7014557f1b86f2caf606186363dfdeba6ad`
+- Installer verifies its embedded Image and requires exact pre-flash boot SHA-256 `3c555f2f5dda7b6085dd38a2869d23ffe680c05d5bcc59625885b726690a00ce`; mismatch aborts before writing
+
+Offline compilation, metadata, archive, and ABI gates pass. Hardware boot and subsystem smoke tests remain mandatory before calling the candidate fully proven on-device.
