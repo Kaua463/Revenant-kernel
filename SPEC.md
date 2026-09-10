@@ -49,6 +49,8 @@ V24 | ABI-audit build ! finish within runner cap; thin LTO allowed because MODVE
 V25 | Final pinned KSU/SUSFS compatibility fixes apply with zero fuzz after exact audited normalization; any unexpected reject, duplicate hook/include, or ignored patch blocks build.
 V26 | Clean-room validation uses an independent checkout and fail-fast shell; success marker is emitted only after the full integration command returns zero.
 V27 | Every post-patch integration gate emits a named checkpoint; final ACK delta is validated by a platform-independent ordered content manifest, not textual `git diff` serialization.
+V28 | Candidate embeds exact stock kernel release plus pinned KernelSU numeric/tag metadata; fallback version, `maybe-dirty`, or any other vermagic blocks packaging.
+V29 | Module ABI audit runs with an explicit ELF parser dependency and compares candidate results to the stock ACK control; identical unresolved module-to-module closure is not mislabeled as a kernel regression.
 
 ## §T
 
@@ -107,3 +109,5 @@ V27 | Every post-patch integration gate emits a named checkpoint; final ACK delt
 | B27 | Post-v3.3 KSU kernel pin could be paired with an incompatible manager | Kernel and manager may evolve their UAPI independently | V5 gates ancestry, identical v3.3 UAPI tree/native bridge, and manager minimum kernel version |
 | B28 | First local clean-room command printed PASS after its shared clone failed | Partial/promisor Git repository could not serve a shared clone, and the outer diagnostic shell was not fail-fast | V26 requires independent checkout plus `set -euo pipefail` before any success marker |
 | B29 | Remote integration exited after patch output without identifying its failed gate | Post-patch assertions were silent and final delta used Git diff serialization | V27 labels each gate and hashes ordered file contents directly |
+| B30 | First successful candidate exposed `maybe-dirty` release and KernelSU `1/v0.0.1` fallback | Unstamped Kleaf generated placeholder SCM metadata and its sandbox hid the separately cloned KernelSU Git repository | V28 pins stock SCM release and passes verified KSU count/tag into the hermetic action, then rejects fallback strings |
+| B31 | Local stock-provider ABI audit stopped before reading modules | Host Python lacked the optional `pyelftools` parser | V29 uses a pinned isolated parser environment and requires baseline-vs-candidate report equivalence |

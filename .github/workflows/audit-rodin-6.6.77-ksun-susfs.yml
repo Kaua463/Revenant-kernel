@@ -23,11 +23,16 @@ env:
   KMI_TAG_OBJECT: 79d26ca363880c3c6f7841045e46427bee6c3c3b
   KMI_COMMIT: f7ebe251035c0d15ff90c6a0a320697932785fad
   KSU_COMMIT: 234f6e040fcbca18b16d2398e1aa225712ec99ad
+  KSU_GIT_VERSION: '3239'
+  KSU_VERSION: '33239'
+  KSU_GIT_TAG: v3.3.0
   KSU_V330_COMMIT: 3b18216f71df189ab3d1b1ce0bdb21be1268e771
   KSU_V330_UAPI_TREE: fc98ae0140c80815260ecaf86ddb6ef06ad29863
   KSU_V330_NATIVES_BLOB: 0fafa35dc7d31ef4c8add60c3f8d98a090027544
   SUSFS_COMMIT: be7b7ef49a1e1b189c3abf00eacaa7ebdb4168c1
   SUSFS_FIX_COMMIT: cd63f371d91fb7fc32014c75728fbb9b686d9ae9
+  STOCK_SCMVERSION: -gca30f3b4bef6-abogki440974771
+  STOCK_KERNEL_RELEASE: 6.6.77-android15-8-gca30f3b4bef6-abogki440974771-4k
 
 jobs:
   candidate:
@@ -92,12 +97,29 @@ jobs:
           cp configs/rodin-6.6.77-ksun-susfs.fragment \
             ws/common/arch/arm64/configs/revenant_ksun_susfs.fragment
 
+      - name: Pin stock-compatible release metadata
+        run: |
+          stamp=ws/build/kernel/kleaf/impl/stamp.bzl
+          test "$(grep -Fc "stable_scmversion_cmd = \"echo '-maybe-dirty'\"" "$stamp")" -eq 1
+          sed -i "s|echo '-maybe-dirty'|echo '$STOCK_SCMVERSION'|" "$stamp"
+          test "$(grep -Fc "stable_scmversion_cmd = \"echo '$STOCK_SCMVERSION'\"" "$stamp")" -eq 1
+
       - name: Build 4K ABI candidate
         run: |
+          set -o pipefail
           cd ws
           tools/bazel build --lto=thin --page_size=4k \
+            --action_env=KSU_GIT_VERSION="$KSU_GIT_VERSION" \
+            --action_env=KSU_GIT_VERSION_VALID=1 \
+            --action_env=KSU_GIT_TAG="$KSU_GIT_TAG" \
             --defconfig_fragment=//common:arch/arm64/configs/revenant_ksun_susfs.fragment \
-            //common:kernel_aarch64_dist
+            //common:kernel_aarch64_dist 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          grep -F -- "-- KernelSU-Next version: $KSU_VERSION" "$GITHUB_WORKSPACE/build.log"
+          grep -F -- "-- KernelSU-Next tag: $KSU_GIT_TAG" "$GITHUB_WORKSPACE/build.log"
+          if grep -Fq -- 'KernelSU-Next version fallback:' "$GITHUB_WORKSPACE/build.log" || \
+             grep -Fq -- 'KernelSU-Next tag fallback:' "$GITHUB_WORKSPACE/build.log"; then
+            exit 1
+          fi
 
       - name: Collect and validate evidence
         run: |
@@ -118,12 +140,19 @@ jobs:
           done
           grep -qx '# CONFIG_KSU_SUSFS_ENABLE_LOG is not set' dist/config
           strings dist/Image | grep -m1 '^Linux version' | tee dist/kernel-banner.txt
-          grep -q '6.6.77-android15-8.*-4k' dist/kernel-banner.txt
+          grep -Fq "Linux version $STOCK_KERNEL_RELEASE " dist/kernel-banner.txt
+          strings dist/Image | grep -Fx "$KSU_GIT_TAG" | tee dist/ksu-version-tag.txt
+          if strings dist/Image | grep -Fxq 'v0.0.1'; then
+            exit 1
+          fi
           strings dist/Image | grep -m3 -E 'KernelSU|SUSFS' | tee dist/root-feature-strings.txt
+          grep -E -- '-- KernelSU-Next (version|tag):' build.log \
+            | sort -u > dist/ksu-build-metadata.txt
           {
             echo "KMI_COMMIT=$KMI_COMMIT"
             echo "KSU_COMMIT=$KSU_COMMIT"
-            echo "KSU_VERSION=33239"
+            echo "KSU_VERSION=$KSU_VERSION"
+            echo "KSU_VERSION_TAG=$KSU_GIT_TAG"
             echo "KSU_MANAGER_COMPAT=v3.3.0-uapi-identical"
             echo "SUSFS_COMMIT=$SUSFS_COMMIT"
             echo "SUSFS_VERSION=v2.2.0"
