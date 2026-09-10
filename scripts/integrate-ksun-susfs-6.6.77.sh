@@ -107,12 +107,34 @@ done
 find "$KSU_DIR/kernel" -type f \( -name '*.orig' -o -name '*.rej' \) -delete
 rm -f "$KSU_DIR/10_enable_susfs_for_ksu.patch"
 
+python3 - "$KSU_DIR/kernel/Kbuild" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+anchor = (
+    'LPATH := /usr/bin/env PATH="$$PATH":/usr/bin:/usr/local/bin\n'
+    'MDIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))\n'
+)
+versioned = anchor + (
+    '\nKSU_GIT_VERSION ?= 3239\n'
+    'KSU_GIT_TAG ?= v3.3.0\n'
+    'KSU_GIT_VERSION_VALID ?= 1\n'
+)
+assert text.count(anchor) == 1
+assert 'KSU_GIT_VERSION ?=' not in text
+assert 'KSU_GIT_TAG ?=' not in text
+assert 'KSU_GIT_VERSION_VALID ?=' not in text
+path.write_text(text.replace(anchor, versioned, 1))
+PY
+
 if command -v sha256sum >/dev/null 2>&1; then
   ksu_diff_sha=$(git -C "$KSU_DIR" diff --binary -- kernel | sha256sum | awk '{print $1}')
 else
   ksu_diff_sha=$(git -C "$KSU_DIR" diff --binary -- kernel | shasum -a 256 | awk '{print $1}')
 fi
-test "$ksu_diff_sha" = 4d74eedefa4ae5679126dc7c79096ef425302ed1b7a1042b3fc06a6af603d18c
+test "$ksu_diff_sha" = c03c8d90c9690080786425d6204e1e19007f4a7cfd94bcae4916eb2b3e0d53e0
 
 cp "$SUSFS_DIR"/kernel_patches/fs/* "$KERNEL_DIR/fs/"
 cp "$SUSFS_DIR"/kernel_patches/include/linux/* "$KERNEL_DIR/include/linux/"
@@ -191,6 +213,9 @@ grep -q 'source "drivers/kernelsu/Kconfig"' "$KERNEL_DIR/drivers/Kconfig" || \
 test -f "$KERNEL_DIR/fs/susfs.c"
 grep -q '^#define SUSFS_VERSION "v2.2.0"' "$KERNEL_DIR/include/linux/susfs.h"
 grep -q 'config KSU_SUSFS' "$KSU_DIR/kernel/Kconfig"
+test "$(grep -c '^KSU_GIT_VERSION ?= 3239$' "$KSU_DIR/kernel/Kbuild")" -eq 1
+test "$(grep -c '^KSU_GIT_TAG ?= v3.3.0$' "$KSU_DIR/kernel/Kbuild")" -eq 1
+test "$(grep -c '^KSU_GIT_VERSION_VALID ?= 1$' "$KSU_DIR/kernel/Kbuild")" -eq 1
 test "$(grep -c '^#include <linux/susfs.h>$' "$KSU_DIR/kernel/core/init.c")" -eq 1
 if grep -q 'ksu_late_loaded' "$KSU_DIR/kernel/core/init.c"; then
   exit 1

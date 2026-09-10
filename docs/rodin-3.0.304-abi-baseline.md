@@ -35,7 +35,7 @@ The ROM userspace is Android 16, while its kernel ABI branch is Android 15 GKI 6
 - KernelSU/SUSFS fix set: `cd63f371d91fb7fc32014c75728fbb9b686d9ae9`
 - KernelSU UAPI tree and Manager native bridge are byte-identical to v3.3.0; Manager minimum supported kernel is `33188`
 - Clean-room GNU patch integration on exact ACK 6.6.77: pass, zero residual rejects/originals
-- Deterministic KernelSU source delta SHA-256: `4d74eedefa4ae5679126dc7c79096ef425302ed1b7a1042b3fc06a6af603d18c`
+- Deterministic KernelSU source delta SHA-256: `c03c8d90c9690080786425d6204e1e19007f4a7cfd94bcae4916eb2b3e0d53e0`
 - Deterministic tracked ACK source delta SHA-256: `3cb6faaa3e9b98d02b953685f50f2af902f37ac61b6e9e06964ac1daac22667d`
 - Platform-independent 26-file content manifest SHA-256: `ceb50cf610affc7a7a671fb07568e5ec033e9d63ad12b7de1a51994f6c935fd2`
 

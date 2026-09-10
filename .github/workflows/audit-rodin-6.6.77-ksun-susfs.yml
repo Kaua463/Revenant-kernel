@@ -109,9 +109,6 @@ jobs:
           set -o pipefail
           cd ws
           tools/bazel build --lto=thin --page_size=4k \
-            --action_env=KSU_GIT_VERSION="$KSU_GIT_VERSION" \
-            --action_env=KSU_GIT_VERSION_VALID=1 \
-            --action_env=KSU_GIT_TAG="$KSU_GIT_TAG" \
             --defconfig_fragment=//common:arch/arm64/configs/revenant_ksun_susfs.fragment \
             //common:kernel_aarch64_dist 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           grep -F -- "-- KernelSU-Next version: $KSU_VERSION" "$GITHUB_WORKSPACE/build.log"
