@@ -1,5 +1,6 @@
 [abi_symbol_list]
   __alloc_pages_bulk
+  __traceiter_android_vh_filemap_map_pages_range
   __tracepoint_android_vh_filemap_map_pages_range
   bio_crypt_set_ctx
   blk_crypto_evict_key

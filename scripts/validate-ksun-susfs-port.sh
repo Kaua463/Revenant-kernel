@@ -30,3 +30,13 @@ grep -qx 'CONFIG_KSU=y' "$fragment"
 grep -qx 'CONFIG_KSU_SUSFS=y' "$fragment"
 grep -qx '# CONFIG_KSU_SUSFS_ENABLE_LOG is not set' "$fragment"
 echo 'KSUN/SUSFS port pins and gates ok'
+python3 - <<'PY'
+from pathlib import Path
+symbols = {s.strip() for s in Path('configs/rodin-6.6.77-boot-symbols').read_text().splitlines()}
+for symbol in symbols:
+    if symbol.startswith('__tracepoint_'):
+        companion = symbol.replace('__tracepoint_', '__traceiter_', 1)
+        if companion not in symbols:
+            raise SystemExit(f'Missing tracepoint companion: {companion}')
+print('KMI tracepoint companion pairs validated')
+PY

@@ -52,6 +52,7 @@ V27 | Every post-patch integration gate emits a named checkpoint; final ACK delt
 V28 | Candidate embeds exact stock kernel release plus pinned KernelSU numeric/tag metadata; fallback version, `maybe-dirty`, or any other vermagic blocks packaging.
 V29 | Module ABI audit runs with an explicit ELF parser dependency and compares candidate results to the stock ACK control; identical unresolved module-to-module closure is not mislabeled as a kernel regression.
 V30 | Audit includes selected vendor_boot release and recovery modules; every required import needs concrete provider and matching CRC. Missing weak ELF imports recorded separately. ACK control equality never excuses unresolved required symbols.
+V31 | Additional KMI lists include matching __traceiter companion for every __tracepoint; validate before source fetch.
 
 ## §T
 
@@ -114,3 +115,4 @@ V30 | Audit includes selected vendor_boot release and recovery modules; every re
 | B31 | Local stock-provider ABI audit stopped before reading modules | Host Python lacked the optional `pyelftools` parser | V29 uses a pinned isolated parser environment and requires baseline-vs-candidate report equivalence |
 | B32 | Metadata-fixed build compiled successfully but its post-build gate rejected KernelSU fallback again | Kleaf sanitizes the nested kernel `make` environment, so Bazel `--action_env` values did not become Kbuild variables | V28 injects the audited count/tag defaults into pinned KSU Kbuild source and validates both normal-version log lines plus absence of fallback |
 | B33 | Run 34438390462 panics loading zram during first-stage init | Audit omitted vendor_boot modules and accepted unresolved imports shared with incomplete ACK control | V30 includes full boot module set; restore seven trimmed exports and required filemap hook; hardware validation remains pending |
+| B34 | Run 34549898711 fails KmiSymbolList before kernel compilation | New filemap tracepoint listed without required __traceiter companion | V31 checks paired symbols locally and before source fetch |
