@@ -10,14 +10,13 @@ import subprocess
 
 
 def read_versions(module: pathlib.Path, objcopy: str):
-    proc = subprocess.run(
-        [objcopy, "--dump-section=__versions=/dev/stdout", str(module)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    data = proc.stdout
-    if proc.returncode or not data:
+    # objcopy with no output filename rewrites its input, stripping signatures.
+    # Keep the argument for CLI compatibility, but parse the section read-only.
+    from elftools.elf.elffile import ELFFile
+    with module.open('rb') as stream:
+        section = ELFFile(stream).get_section_by_name('__versions')
+        data = section.data() if section is not None else b''
+    if not data:
         raise ValueError(f"cannot read module versions: {module}")
     if len(data) % 64:
         raise ValueError(f"invalid __versions size: {module}: {len(data)}")

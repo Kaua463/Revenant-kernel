@@ -53,6 +53,8 @@ V28 | Candidate embeds exact stock kernel release plus pinned KernelSU numeric/t
 V29 | Module ABI audit runs with an explicit ELF parser dependency and compares candidate results to the stock ACK control; identical unresolved module-to-module closure is not mislabeled as a kernel regression.
 V30 | Audit includes selected vendor_boot release and recovery modules; every required import needs concrete provider and matching CRC. Missing weak ELF imports recorded separately. ACK control equality never excuses unresolved required symbols.
 V31 | Additional KMI lists include matching __traceiter companion for every __tracepoint; validate before source fetch.
+V32 | Stock signed system_dlkm modules ! cryptographic verification against pinned ROM public certificate; candidate Image ! embeds certificate; MODULE_SIG_PROTECT unchanged. CRC presence alone never proves provider loadability.
+V33 | ABI/signature audits read-only; input module bytes incl. signature trailers unchanged; test signed ELF preservation.
 
 ## §T
 
@@ -116,3 +118,5 @@ V31 | Additional KMI lists include matching __traceiter companion for every __tr
 | B32 | Metadata-fixed build compiled successfully but its post-build gate rejected KernelSU fallback again | Kleaf sanitizes the nested kernel `make` environment, so Bazel `--action_env` values did not become Kbuild variables | V28 injects the audited count/tag defaults into pinned KSU Kbuild source and validates both normal-version log lines plus absence of fallback |
 | B33 | Run 34438390462 panics loading zram during first-stage init | Audit omitted vendor_boot modules and accepted unresolved imports shared with incomplete ACK control | V30 includes full boot module set; restore seven trimmed exports and required filemap hook; hardware validation remains pending |
 | B34 | Run 34549898711 fails KmiSymbolList before kernel compilation | New filemap tracepoint listed without required __traceiter companion | V31 checks paired symbols locally and before source fetch |
+| B35 | Run 34551018761 boots without Wi-Fi/Bluetooth; user reports slowdown | Stock rfkill/bluetooth providers unavailable; candidate omits certificate verifying all 78 stock system_dlkm modules. Slowdown cause unresolved | V32 restores pinned public trust anchor; keep hardware gate pending |
+| B36 | Local audited module copies lose signature trailers | objcopy --dump-section without output rewrites input | V33 read-only ELF section parser plus byte-preservation regression test |

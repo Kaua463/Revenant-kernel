@@ -30,6 +30,9 @@ grep -qx 'CONFIG_KSU=y' "$fragment"
 grep -qx 'CONFIG_KSU_SUSFS=y' "$fragment"
 grep -qx '# CONFIG_KSU_SUSFS_ENABLE_LOG is not set' "$fragment"
 echo 'KSUN/SUSFS port pins and gates ok'
+python3 scripts/check-stock-module-trust.py
+grep -qx 'CONFIG_SYSTEM_TRUSTED_KEYS="certs/rodin-stock-304-modules.pem"' "$fragment"
+grep -Fq 'python3 scripts/check-stock-module-trust.py --image dist/Image' "$workflow"
 python3 - <<'PY'
 from pathlib import Path
 symbols = {s.strip() for s in Path('configs/rodin-6.6.77-boot-symbols').read_text().splitlines()}
