@@ -15,6 +15,10 @@ on:
       - scripts/check-stock-module-trust.py
       - scripts/test-module-trust.py
       - scripts/audit-rom-module-abi.py
+      - scripts/rom-module-reference.py
+      - scripts/package-rodin-orangefox.py
+      - configs/rodin-304-module-reference.json
+      - packaging/**
 
 permissions:
   contents: read
@@ -60,6 +64,7 @@ jobs:
             bc bison build-essential ca-certificates curl flex git libelf-dev \
             libssl-dev lz4 patch python3 python3-pyelftools rsync xz-utils zip zstd
           python3 scripts/test-module-trust.py
+          python3 -m py_compile scripts/rom-module-reference.py scripts/package-rodin-orangefox.py
           mkdir -p "$RUNNER_TEMP/bin"
           curl --fail --location --retry 5 \
             https://storage.googleapis.com/git-repo-downloads/repo \
@@ -143,6 +148,8 @@ jobs:
           grep -qx 'CONFIG_SYSTEM_TRUSTED_KEYS="certs/rodin-stock-304-modules.pem"' dist/config
           grep -qx 'CONFIG_MODULE_SIG_PROTECT=y' dist/config
           cp configs/rodin-stock-304-modules.pem dist/rodin-stock-304-modules.pem
+          python3 scripts/rom-module-reference.py check --symvers dist/Module.symvers --image dist/Image --config dist/config
+          cp configs/rodin-304-module-reference.json dist/rodin-304-module-reference.json
           python3 - <<'PY'
           from pathlib import Path
           expected = {
@@ -188,6 +195,7 @@ jobs:
             echo "SUSFS_FIX_COMMIT=$SUSFS_FIX_COMMIT"
             echo "LTO_MODE=thin-abi-audit"
           } > dist/provenance.txt
+          python3 scripts/package-rodin-orangefox.py --dist dist --run-id "$GITHUB_RUN_ID"
           find dist -type f ! -name SHA256SUMS -exec sha256sum {} + \
             | sed 's#  dist/#  #' | sort -k2 > dist/SHA256SUMS
           (cd dist && sha256sum --check SHA256SUMS)
