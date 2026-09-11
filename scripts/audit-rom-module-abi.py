@@ -17,8 +17,8 @@ def read_versions(module: pathlib.Path, objcopy: str):
         check=False,
     )
     data = proc.stdout
-    if not data:
-        return []
+    if proc.returncode or not data:
+        raise ValueError(f"cannot read module versions: {module}")
     if len(data) % 64:
         raise ValueError(f"invalid __versions size: {module}: {len(data)}")
     result = []
@@ -75,9 +75,23 @@ def read_module_exports(module: pathlib.Path):
     return result
 
 
+def weak_imports(module):
+    from elftools.elf.elffile import ELFFile
+    with module.open('rb') as stream:
+        elf = ELFFile(stream)
+        symtab = elf.get_section_by_name('.symtab')
+        if symtab is None:
+            raise ValueError(f'missing ELF symbol table: {module}')
+        return {s.name for s in symtab.iter_symbols()
+                if s.entry['st_shndx'] == 'SHN_UNDEF'
+                and s.entry['st_info']['bind'] == 'STB_WEAK'}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--stock-modules", type=pathlib.Path, required=True)
+    parser.add_argument("--extra-stock-modules", type=pathlib.Path, action="append", default=[])
+    parser.add_argument("--strict", action="store_true")
     parser.add_argument("--candidate-modules", type=pathlib.Path, required=True)
     parser.add_argument("--candidate-symvers", type=pathlib.Path, required=True)
     parser.add_argument("--stock-providers", action="store_true")
@@ -86,6 +100,13 @@ def main():
     args = parser.parse_args()
 
     stock = sorted(args.stock_modules.rglob("*.ko"))
+    for root in args.extra_stock_modules:
+        extra = sorted(root.rglob("*.ko"))
+        if not extra:
+            raise ValueError(f"empty module source: {root}")
+        stock.extend(extra)
+    if not stock:
+        raise ValueError("no stock modules found")
     candidate = sorted(args.candidate_modules.rglob("*.ko"))
     candidate_by_name = collections.defaultdict(list)
     for module in candidate:
@@ -105,11 +126,12 @@ def main():
     unique_imports = {}
     for module in stock:
         states = collections.Counter()
+        optional = weak_imports(module)
         for name, stock_crc in read_versions(module, args.objcopy):
             provider = "stock_module" if name in stock_exports else "candidate_kernel"
             candidate_crc = stock_exports.get(name, symvers.get(name))
             if candidate_crc is None:
-                state = "missing"
+                state = "optional_weak_missing" if name in optional else "missing"
             elif candidate_crc != stock_crc:
                 state = "crc_mismatch"
             else:
@@ -153,6 +175,8 @@ def main():
         "stock_basenames_present_in_candidate", "stock_basenames_absent_from_candidate",
         "stock_vermagic", "import_records", "unique_import_symbols")
     }, indent=2))
+    if args.strict and (unique_states["missing"] or unique_states["crc_mismatch"]):
+        raise SystemExit("ABI gate failed: unresolved or mismatched imports")
 
 
 if __name__ == "__main__":

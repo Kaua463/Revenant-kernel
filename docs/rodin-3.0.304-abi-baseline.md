@@ -1,5 +1,20 @@
 # Rodin DyperOS 3.0.304 ABI baseline
 
+## Hardware failure supersedes earlier offline approval
+
+Run `34438390462` failed hardware boot on 2026-09-10. Persistent console records
+five missing zram imports followed by `Attempted to kill init!` at 0.710 seconds.
+Exact full stock boot was restored via fastboot, hash verified, and Android boot
+completion confirmed. The failed installer has been quarantined.
+
+The 431 unresolved names in the earlier audit were not proven harmless.
+That audit omitted vendor_boot. Including selected 6.6.77 and recovery modules
+gives 610 module files, 6436 matching unique imports, eight required missing
+imports, and one missing ELF weak import (`mtk_drm_gateic_set_backlight`).
+The weak reference is optional;
+the eight required symbols block packaging. Historical claims below are not
+an approval to flash.
+
 Reference boot SHA-256: `3c555f2f5dda7b6085dd38a2869d23ffe680c05d5bcc59625885b726690a00ce`
 
 Stock kernel:

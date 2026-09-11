@@ -1,0 +1,9 @@
+[abi_symbol_list]
+  __alloc_pages_bulk
+  __tracepoint_android_vh_filemap_map_pages_range
+  bio_crypt_set_ctx
+  blk_crypto_evict_key
+  blk_crypto_init_key
+  blk_crypto_start_using_key
+  scsi_device_set_state
+  scsi_host_busy

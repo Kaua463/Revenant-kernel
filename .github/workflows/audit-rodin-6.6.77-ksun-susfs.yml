@@ -9,6 +9,8 @@ on:
       - configs/rodin-6.6.77-ksun-susfs.fragment
       - scripts/integrate-ksun-susfs-6.6.77.sh
       - scripts/validate-ksun-susfs-port.sh
+      - scripts/fix-rodin-boot-abi.py
+      - configs/rodin-6.6.77-boot-symbols
 
 permissions:
   contents: read
@@ -96,6 +98,7 @@ jobs:
             scripts/integrate-ksun-susfs-6.6.77.sh
           cp configs/rodin-6.6.77-ksun-susfs.fragment \
             ws/common/arch/arm64/configs/revenant_ksun_susfs.fragment
+          python3 scripts/fix-rodin-boot-abi.py ws/common
 
       - name: Pin stock-compatible release metadata
         run: |
@@ -129,6 +132,24 @@ jobs:
             | xargs -I{} cp '{}' dist/config
           test -s dist/Image
           test -s dist/Module.symvers
+          python3 - <<'PY'
+          from pathlib import Path
+          expected = {
+              '__alloc_pages_bulk': '0x41b1537b',
+              '__tracepoint_android_vh_filemap_map_pages_range': '0xf590d26c',
+              'bio_crypt_set_ctx': '0xb114f679',
+              'blk_crypto_evict_key': '0xac2d25cb',
+              'blk_crypto_init_key': '0xf001a432',
+              'blk_crypto_start_using_key': '0xc7a37e90',
+              'scsi_device_set_state': '0x681b1aa2',
+              'scsi_host_busy': '0x9665b881',
+          }
+          actual = {r.split()[1]: r.split()[0] for r in Path('dist/Module.symvers').read_text().splitlines()}
+          errors = {s: (crc, actual.get(s)) for s, crc in expected.items() if actual.get(s) != crc}
+          if errors:
+              raise SystemExit(f'ROM boot ABI mismatch: {errors}')
+          print('All eight ROM boot dependency CRCs match')
+          PY
           for symbol in KSU KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT \
             KSU_SUSFS_SUS_KSTAT KSU_SUSFS_SPOOF_UNAME \
             KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
