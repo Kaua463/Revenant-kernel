@@ -10,6 +10,8 @@ on:
       - scripts/integrate-ksun-susfs-6.6.77.sh
       - scripts/validate-ksun-susfs-port.sh
       - scripts/fix-rodin-boot-abi.py
+      - scripts/align-rodin-kmi.py
+      - scripts/test-rodin-kmi.py
       - configs/rodin-6.6.77-boot-symbols
       - configs/rodin-stock-304-modules.pem
       - scripts/check-stock-module-trust.py
@@ -60,6 +62,7 @@ jobs:
           scripts/validate-ksun-susfs-port.sh
           python3 scripts/test-stock-kfence.py
           python3 scripts/test-stock-config-alignment.py
+          python3 scripts/test-rodin-kmi.py
           python3 scripts/check-stock-kfence.py configs/rodin-6.6.77-ksun-susfs.fragment
           python3 scripts/check-stock-config-alignment.py configs/rodin-6.6.77-ksun-susfs.fragment
 
@@ -118,6 +121,7 @@ jobs:
           cp configs/rodin-6.6.77-ksun-susfs.fragment \
             ws/common/arch/arm64/configs/revenant_ksun_susfs.fragment
           python3 scripts/fix-rodin-boot-abi.py ws/common
+          python3 scripts/align-rodin-kmi.py ws/common
           python3 scripts/check-stock-module-trust.py
           cp configs/rodin-stock-304-modules.pem ws/common/certs/rodin-stock-304-modules.pem
 

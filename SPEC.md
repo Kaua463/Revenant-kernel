@@ -55,6 +55,7 @@ V30 | Audit includes selected vendor_boot release and recovery modules; every re
 V31 | Additional KMI lists include matching __traceiter companion for every __tracepoint; validate before source fetch.
 V32 | Stock signed system_dlkm modules ! cryptographic verification against pinned ROM public certificate; candidate Image ! embeds certificate; MODULE_SIG_PROTECT unchanged. CRC presence alone never proves provider loadability.
 V33 | ABI/signature audits read-only; input module bytes incl. signature trailers unchanged; test signed ELF preservation.
+V34 | Rodin sideband=n → exclude only six xhci_sideband exports from KMI lists after verifying no stock module import; source drift or required import blocks edits; strict KMI gate retained.
 
 ## §T
 
@@ -120,3 +121,4 @@ V33 | ABI/signature audits read-only; input module bytes incl. signature trailer
 | B34 | Run 34549898711 fails KmiSymbolList before kernel compilation | New filemap tracepoint listed without required __traceiter companion | V31 checks paired symbols locally and before source fetch |
 | B35 | Run 34551018761 boots without Wi-Fi/Bluetooth; user reports slowdown | Stock rfkill/bluetooth providers unavailable; candidate omits certificate verifying all 78 stock system_dlkm modules. Slowdown cause unresolved | V32 restores pinned public trust anchor; keep hardware gate pending |
 | B36 | Local audited module copies lose signature trailers | objcopy --dump-section without output rewrites input | V33 read-only ELF section parser plus byte-preservation regression test |
+| B37 | Run 35816260863 fails strict KMI after compile | Stock sideband=n conflicts with generic ACK symbol lists | V34 exact six-symbol exclusion + dependency and drift tests |
