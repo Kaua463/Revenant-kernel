@@ -13,6 +13,10 @@ on:
       - configs/rodin-6.6.77-boot-symbols
       - configs/rodin-stock-304-modules.pem
       - scripts/check-stock-module-trust.py
+      - scripts/check-stock-kfence.py
+      - scripts/test-stock-kfence.py
+      - scripts/check-stock-config-alignment.py
+      - scripts/test-stock-config-alignment.py
       - scripts/test-module-trust.py
       - scripts/audit-rom-module-abi.py
       - scripts/rom-module-reference.py
@@ -52,7 +56,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate repository gates
-        run: scripts/validate-ksun-susfs-port.sh
+        run: |
+          scripts/validate-ksun-susfs-port.sh
+          python3 scripts/test-stock-kfence.py
+          python3 scripts/test-stock-config-alignment.py
+          python3 scripts/check-stock-kfence.py configs/rodin-6.6.77-ksun-susfs.fragment
+          python3 scripts/check-stock-config-alignment.py configs/rodin-6.6.77-ksun-susfs.fragment
 
       - name: Install dependencies
         run: |
@@ -123,7 +132,7 @@ jobs:
         run: |
           set -o pipefail
           cd ws
-          tools/bazel build --lto=thin --page_size=4k \
+          tools/bazel build --lto=none --page_size=4k \
             --defconfig_fragment=//common:arch/arm64/configs/revenant_ksun_susfs.fragment \
             //common:kernel_aarch64_dist 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           grep -F -- "-- KernelSU-Next version: $KSU_VERSION" "$GITHUB_WORKSPACE/build.log"
@@ -144,6 +153,8 @@ jobs:
             | xargs -I{} cp '{}' dist/config
           test -s dist/Image
           test -s dist/Module.symvers
+          python3 scripts/check-stock-kfence.py dist/config
+          python3 scripts/check-stock-config-alignment.py dist/config
           python3 scripts/check-stock-module-trust.py --image dist/Image
           grep -qx 'CONFIG_SYSTEM_TRUSTED_KEYS="certs/rodin-stock-304-modules.pem"' dist/config
           grep -qx 'CONFIG_MODULE_SIG_PROTECT=y' dist/config
@@ -193,7 +204,7 @@ jobs:
             echo "SUSFS_COMMIT=$SUSFS_COMMIT"
             echo "SUSFS_VERSION=v2.2.0"
             echo "SUSFS_FIX_COMMIT=$SUSFS_FIX_COMMIT"
-            echo "LTO_MODE=thin-abi-audit"
+            echo "LTO_MODE=none-stock-alignment"
           } > dist/provenance.txt
           python3 scripts/package-rodin-orangefox.py --dist dist --run-id "$GITHUB_RUN_ID"
           find dist -type f ! -name SHA256SUMS -exec sha256sum {} + \
