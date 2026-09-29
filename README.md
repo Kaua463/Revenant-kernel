@@ -29,7 +29,7 @@
 - KernelSU-Next or Magisk
 
 ## Installation
-No custom recovery needed for rodin (none exists). Flash from your phone:
+Flash from your phone:
 
 1. Download the AnyKernel3 zip from the Releases page
 2. Open Horizon Kernel Flasher or Franco Kernel Manager
