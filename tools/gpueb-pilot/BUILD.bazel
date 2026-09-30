@@ -1,0 +1,8 @@
+load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
+
+kernel_module(
+    name = "gpueb_sram_pilot",
+    srcs = ["Makefile", "gpueb_sram_pilot.c"],
+    outs = ["gpueb_sram_pilot.ko"],
+    kernel_build = "//common:kernel_aarch64",
+)

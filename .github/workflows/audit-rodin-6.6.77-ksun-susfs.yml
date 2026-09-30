@@ -73,7 +73,7 @@ jobs:
           done < <(sudo grep -RIl 'dl.google.com/linux/chrome' /etc/apt/sources.list.d || true)
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            bc bison build-essential ca-certificates curl flex git libelf-dev \
+            bc bison build-essential ca-certificates curl flex git kmod libelf-dev \
             libssl-dev lz4 patch python3 python3-pyelftools rsync xz-utils zip zstd
           python3 scripts/test-module-trust.py
           python3 -m py_compile scripts/rom-module-reference.py scripts/package-rodin-orangefox.py
@@ -145,6 +145,28 @@ jobs:
              grep -Fq -- 'KernelSU-Next tag fallback:' "$GITHUB_WORKSPACE/build.log"; then
             exit 1
           fi
+
+      - name: Build bounded GPUEB read pilot (no device access)
+        run: |
+          set -euo pipefail
+          cp -R tools/gpueb-pilot ws/gpueb-pilot
+          cd ws
+          tools/bazel build --lto=none --page_size=4k \
+            --defconfig_fragment=//common:arch/arm64/configs/revenant_ksun_susfs.fragment \
+            //gpueb-pilot:gpueb_sram_pilot
+          mkdir -p "$GITHUB_WORKSPACE/pilot-dist"
+          pilot="$(find -L bazel-bin/gpueb-pilot -type f -name gpueb_sram_pilot.ko -print -quit)"
+          test -n "$pilot"
+          cp "$pilot" "$GITHUB_WORKSPACE/pilot-dist/gpueb_sram_pilot.ko"
+          test "$(modinfo -F vermagic "$GITHUB_WORKSPACE/pilot-dist/gpueb_sram_pilot.ko" | cut -d' ' -f1)" = "$STOCK_KERNEL_RELEASE"
+          sha256sum "$GITHUB_WORKSPACE/pilot-dist/gpueb_sram_pilot.ko" \
+            > "$GITHUB_WORKSPACE/pilot-dist/SHA256SUMS"
+
+      - name: Upload untested GPUEB pilot module
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpueb-pilot-untested-${{ github.run_id }}
+          path: pilot-dist/
 
       - name: Collect and validate evidence
         run: |
