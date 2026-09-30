@@ -60,6 +60,7 @@ jobs:
       - name: Validate repository gates
         run: |
           scripts/validate-ksun-susfs-port.sh
+          python3 scripts/test-gpueb-pilot-build-shape.py
           python3 scripts/test-stock-kfence.py
           python3 scripts/test-stock-config-alignment.py
           python3 scripts/test-rodin-kmi.py
