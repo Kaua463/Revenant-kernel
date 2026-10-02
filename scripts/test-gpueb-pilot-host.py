@@ -11,7 +11,6 @@ shim = r'''
 #ifndef PILOT_SHIM_H
 #define PILOT_SHIM_H
 #include <assert.h>
-#include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -26,6 +25,13 @@ typedef int64_t loff_t;
 #define __init
 #define __exit
 #define ERESTARTSYS 512
+/* Linux errno values, independent of libc's inclusion of linux/errno.h. */
+#define EPERM 1
+#define ENXIO 6
+#define ENOMEM 12
+#define EFAULT 14
+#define ENODEV 19
+#define EINVAL 22
 #define CAP_SYS_RAWIO 17
 #define SZ_4K 4096
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
