@@ -160,8 +160,13 @@ jobs:
           test -n "$pilot"
           cp "$pilot" "$GITHUB_WORKSPACE/pilot-dist/gpueb_sram_pilot.ko"
           test "$(modinfo -F vermagic "$GITHUB_WORKSPACE/pilot-dist/gpueb_sram_pilot.ko" | cut -d' ' -f1)" = "$STOCK_KERNEL_RELEASE"
-          sha256sum "$GITHUB_WORKSPACE/pilot-dist/gpueb_sram_pilot.ko" \
-            > "$GITHUB_WORKSPACE/pilot-dist/SHA256SUMS"
+          cp "$GITHUB_WORKSPACE/tools/gpueb-pilot/gpueb_sram_pilot.c" \
+            "$GITHUB_WORKSPACE/pilot-dist/gpueb_sram_pilot.c"
+          modinfo "$GITHUB_WORKSPACE/pilot-dist/gpueb_sram_pilot.ko" \
+            > "$GITHUB_WORKSPACE/pilot-dist/modinfo.txt"
+          cd "$GITHUB_WORKSPACE/pilot-dist"
+          sha256sum gpueb_sram_pilot.ko gpueb_sram_pilot.c modinfo.txt > SHA256SUMS
+          sha256sum --check SHA256SUMS
 
       - name: Upload untested GPUEB pilot module
         uses: actions/upload-artifact@v4

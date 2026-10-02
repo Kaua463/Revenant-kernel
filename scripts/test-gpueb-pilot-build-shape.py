@@ -22,7 +22,14 @@ assert "#define GPUEB_BASE 0x13c00000ULL" in reader
 assert "#define PILOT_SIZE 64U" in reader
 assert "#define FIRST_REG 0x13c4fd1cULL" in reader
 assert "BUILD_BUG_ON(GPUEB_BASE + SZ_4K > FIRST_REG)" in reader
-assert "data[i] = readb(mapped + i)" in reader
+assert "snapshot[i] = readb(mapped + i)" in reader
+assert "capable(CAP_SYS_RAWIO)" in reader
+assert "if (!count || *pos >= PILOT_SIZE)" in reader
+assert "mutex_lock_interruptible(&pilot_lock)" in reader
+assert "if (snapshot_valid)" in reader
+assert ".proc_lseek = no_llseek" in reader
+for index in (0, 1, 4):
+    assert f"of_address_to_resource(node, {index}, &resource)" in reader
 for forbidden in ("writeb(", "writew(", "writel(", "memcpy_toio("):
     assert forbidden not in reader
 
