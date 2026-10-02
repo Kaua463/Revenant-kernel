@@ -25,6 +25,9 @@ on:
       - scripts/package-rodin-orangefox.py
       - configs/rodin-304-module-reference.json
       - packaging/**
+      - tools/gpueb-pilot/**
+      - scripts/test-gpueb-pilot-build-shape.py
+      - scripts/test-gpueb-pilot-host.py
 
 permissions:
   contents: read
@@ -61,6 +64,7 @@ jobs:
         run: |
           scripts/validate-ksun-susfs-port.sh
           python3 scripts/test-gpueb-pilot-build-shape.py
+          python3 scripts/test-gpueb-pilot-host.py
           python3 scripts/test-stock-kfence.py
           python3 scripts/test-stock-config-alignment.py
           python3 scripts/test-rodin-kmi.py
@@ -160,6 +164,7 @@ jobs:
           test -n "$pilot"
           cp "$pilot" "$GITHUB_WORKSPACE/pilot-dist/gpueb_sram_pilot.ko"
           test "$(modinfo -F vermagic "$GITHUB_WORKSPACE/pilot-dist/gpueb_sram_pilot.ko" | cut -d' ' -f1)" = "$STOCK_KERNEL_RELEASE"
+          test "$(modinfo -F version "$GITHUB_WORKSPACE/pilot-dist/gpueb_sram_pilot.ko")" = "2"
           cp "$GITHUB_WORKSPACE/tools/gpueb-pilot/gpueb_sram_pilot.c" \
             "$GITHUB_WORKSPACE/pilot-dist/gpueb_sram_pilot.c"
           modinfo "$GITHUB_WORKSPACE/pilot-dist/gpueb_sram_pilot.ko" \

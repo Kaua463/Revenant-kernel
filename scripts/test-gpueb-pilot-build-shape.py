@@ -22,7 +22,12 @@ assert "#define GPUEB_BASE 0x13c00000ULL" in reader
 assert "#define PILOT_SIZE 64U" in reader
 assert "#define FIRST_REG 0x13c4fd1cULL" in reader
 assert "BUILD_BUG_ON(GPUEB_BASE + SZ_4K > FIRST_REG)" in reader
-assert "snapshot[i] = readb(mapped + i)" in reader
+assert "snapshot[i] = cpu_to_le32(readl(mapped + i * sizeof(u32)))" in reader
+assert "static __le32 snapshot[PILOT_SIZE / sizeof(u32)]" in reader
+assert "i < ARRAY_SIZE(snapshot)" in reader
+assert 'MODULE_VERSION("2")' in reader
+assert "BUILD_BUG_ON(PILOT_SIZE % sizeof(u32))" in reader
+assert "BUILD_BUG_ON(GPUEB_BASE % sizeof(u32))" in reader
 assert "capable(CAP_SYS_RAWIO)" in reader
 assert "if (!count || *pos >= PILOT_SIZE)" in reader
 assert "mutex_lock_interruptible(&pilot_lock)" in reader

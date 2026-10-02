@@ -16,6 +16,9 @@ negative-position and EOF requests cause no MMIO access. Seeking is disabled.
 A mutex serializes capture. At most one 64-byte hardware capture occurs per
 module load; subsequent opens/reads use the cached snapshot, including after
 a failed copy to userspace. `proc_remove` removes the interface on unload.
+Module version 2 uses 16 aligned readl accesses, serialized as little-endian
+words to retain the same 64-byte output. This matches word access evidence in
+the Dyper ROM LK coredump instead of the earlier pilot's unverified readb width.
 
 ## What offline checks cannot establish
 
@@ -23,9 +26,9 @@ a failed copy to userspace. `proc_remove` removes the interface on unload.
 - The driver reports Active from g_shared_status; this is not a power hold.
   Power may change after the host check. No validated, read-only runtime
   power interlock was found; none is invented here.
-- Byte reads retain the original pilot's access width. The documented DT
-  does not establish supported SRAM bus widths or absence of DEVAPC/MPU
-  protection. A bus abort/reboot remains possible during the first read.
+- Word access matches the observed LK implementation. Neither that evidence
+  nor the DT establishes absence of DEVAPC/MPU protection for Android's AP
+  context. A bus abort/reboot remains possible during the first read.
 - Compilation/modpost/vermagic do not prove that insmod will be accepted by
   the running kernel's protected-symbol and signature policy.
 - This is a pilot, not a complete SRAM dump or proof of decrypted firmware.

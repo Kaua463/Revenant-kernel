@@ -2,8 +2,10 @@
 /* Deliberately limited rodin GPUEB SRAM read pilot. No MMIO writes. */
 #include <linux/errno.h>
 #include <linux/capability.h>
+#include <asm/byteorder.h>
 #include <linux/io.h>
 #include <linux/ioport.h>
+#include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
@@ -22,7 +24,7 @@
 
 static struct proc_dir_entry *pilot_entry;
 static DEFINE_MUTEX(pilot_lock);
-static u8 snapshot[PILOT_SIZE];
+static __le32 snapshot[PILOT_SIZE / sizeof(u32)];
 static bool snapshot_valid;
 
 static ssize_t pilot_read(struct file *file, char __user *user_buf,
@@ -48,13 +50,16 @@ static ssize_t pilot_read(struct file *file, char __user *user_buf,
 	/* Never map any GPR, mailbox or unknown tail. */
 	BUILD_BUG_ON(GPUEB_BASE + SZ_4K > FIRST_REG);
 	BUILD_BUG_ON(PILOT_SIZE > SZ_4K);
+	BUILD_BUG_ON(GPUEB_BASE % sizeof(u32));
+	BUILD_BUG_ON(PILOT_SIZE % sizeof(u32));
 	mapped = ioremap(GPUEB_BASE, SZ_4K);
 	if (!mapped) {
 		result = -ENXIO;
 		goto unlock;
 	}
-	for (i = 0; i < PILOT_SIZE; i++)
-		snapshot[i] = readb(mapped + i);
+	/* Match the aligned word accesses observed in this ROM's LK. */
+	for (i = 0; i < ARRAY_SIZE(snapshot); i++)
+		snapshot[i] = cpu_to_le32(readl(mapped + i * sizeof(u32)));
 	iounmap(mapped);
 	snapshot_valid = true;
 
@@ -123,4 +128,5 @@ static void __exit pilot_exit(void)
 module_init(pilot_init);
 module_exit(pilot_exit);
 MODULE_LICENSE("GPL");
+MODULE_VERSION("2");
 MODULE_DESCRIPTION("Bounded read-only GPUEB SRAM pilot for rodin");
