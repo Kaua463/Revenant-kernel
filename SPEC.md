@@ -3,6 +3,7 @@
 ## §G
 
 G1 | Build complete pinned POCO X7 Pro `rodin`/MT6899 kernel+module tree for DyperOS 3.0.304, preserving existing mods and adding KernelSU Next + SUSFS + requested network set.
+G2 | Recover omitted Xiaomi feature contracts from exact stock; enable evidence-backed reimplementation, not universal-version compatibility.
 
 ## §C
 
@@ -56,6 +57,7 @@ V31 | Additional KMI lists include matching __traceiter companion for every __tr
 V32 | Stock signed system_dlkm modules ! cryptographic verification against pinned ROM public certificate; candidate Image ! embeds certificate; MODULE_SIG_PROTECT unchanged. CRC presence alone never proves provider loadability.
 V33 | ABI/signature audits read-only; input module bytes incl. signature trailers unchanged; test signed ELF preservation.
 V34 | Rodin sideband=n → exclude only six xhci_sideband exports from KMI lists after verifying no stock module import; source drift or required import blocks edits; strict KMI gate retained.
+V35 | Stock recovery ! pinned boot/Image/kallsyms hashes, BTF layouts & instruction evidence; inferred spans/direct calls ≠ complete semantics; built-in features ≠ standalone modules; historical candidate ≠ current build; no stubs/forced loading.
 
 ## §T
 
@@ -80,6 +82,7 @@ V34 | Rodin sideband=n → exclude only six xhci_sideband exports from KMI lists
 | T17 | Extract stock 6.6.77 technical evidence and build compatibility matrix | x |
 | T18 | Fix every resolvable critical incompatibility without bypasses | ~ |
 | T19 | Rebuild; run clean-room ABI/module/boot-image validation | ~ |
+| T20 | Recover omitted Xiaomi feature/module contracts; implement only validated semantics; V20,V21,V33,V35; initial extraction and two contract checks pass, full recovery pending | ~ |
 
 ## §B
 
