@@ -11,6 +11,9 @@ on:
       - scripts/test-dmabuf-exporter-source.py
       - scripts/prepare-dmabuf-fault-sites.py
       - scripts/test-dmabuf-fault-sites.py
+      - scripts/test-dmabuf-folded-levels.py
+      - scripts/prepare-dmabuf-reimplementation.py
+      - tools/stock-recovery/overlays/dma-6.6.77/**
       - scripts/test-dmabuf-audit-fault-plan.py
       - scripts/test-dmabuf-audit-log-formats.py
       - scripts/test-dmabuf-runtime-integration.py
@@ -113,6 +116,10 @@ jobs:
           python3 scripts/test-dmabuf-exporter-source.py
           python3 scripts/test-dmabuf-audit-fault-plan.py
           python3 scripts/test-dmabuf-audit-log-formats.py
+          DMA_FOLDED_ACK_SOURCE="$GITHUB_WORKSPACE/ws/common" \
+            python3 scripts/test-dmabuf-folded-levels.py
+          DMA_ACK_REFERENCE="$GITHUB_WORKSPACE/runtime-reference" \
+            python3 scripts/test-dmabuf-fault-sites.py
           DMA_ACK_REFERENCE="$GITHUB_WORKSPACE/runtime-reference" \
             python3 scripts/test-dmabuf-runtime-integration.py
           python3 scripts/validate-dmabuf-overlay.py --source ws/common \

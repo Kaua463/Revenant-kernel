@@ -78,7 +78,8 @@ static pgd_t *pgd_offset(struct mm_struct *m,unsigned long a){assert(a<1UL<<30);
 static uint64_t addr_end(uint64_t a,uint64_t e,uint64_t size){uint64_t n=(a&~(size-1))+size;return n-1<e-1?n:e;}
 #define pgd_addr_end(a,e) addr_end(a,e,1UL<<30)
 #define pmd_addr_end(a,e) addr_end(a,e,1UL<<21)
-static int pgd_none(pgd_t p){return !p.val;}
+#define pgd_none(p) 0 /* ACK folded-level predicate, not raw entry contents. */
+static int pud_none(pud_t p){return !p.val;}
 static int __pmd_alloc(struct mm_struct *m,pud_t *p,unsigned long a){(void)p;trace(3,0x1001000,0x1002000,a,0);if(fail==1)return -12;m->pgd.val=0x1000003;return 0;}
 static void *__va(uint64_t pa){assert(pa==0x1000000);return indexed_pmd(0);}
 static pgtable_t pte_alloc_one(struct mm_struct *m){assert(m==&mm);trace(4,0x440dc0,0,0,0);if(++allocs==fail-1)return NULL;

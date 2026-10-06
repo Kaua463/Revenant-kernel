@@ -40,6 +40,10 @@ PASS = mock_pass()
 
 
 class Runner(unittest.TestCase):
+    def test_kernel_error_precedes_missing_completion_diagnostic(self):
+        with self.assertRaisesRegex(ValueError,'guest/kernel failure reported: Oops:'):
+            module.check_log('Internal error: Oops: bad pointer\nKernel panic\n')
+
     def test_export_core_events_fail_closed(self):
         mutations = (
             PASS.replace('DMA_EXPORT_RELEASE id=1 mode=0\n',''),

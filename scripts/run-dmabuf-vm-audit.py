@@ -19,6 +19,11 @@ def check_config(text):
 
 
 def check_log(text):
+    # Preserve causal kernel failure rather than replacing it with the later
+    # missing-pass-marker symptom when a guest dies before completing.
+    error = re.search(r'DMA_(?:GUEST_FAIL|VM_RESULT_FAIL|AUDIT_FAULT_FAIL|AUDIT_ACCOUNTING_FAIL)|BUG:|WARNING:|Oops:|Kernel panic|Call trace:',text)
+    if error:
+        raise ValueError('guest/kernel failure reported: '+error.group(0))
     for marker in ('DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-pmd',
                    'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-pte',
                    'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-fault-pmd',
@@ -26,8 +31,6 @@ def check_log(text):
                    'DMA_GUEST_PASS:', 'DMA_VM_RESULT_PASS:'):
         if text.count(marker) != 1:
             raise ValueError('missing/duplicate guest completion: ' + marker)
-    if re.search(r'DMA_(?:GUEST_FAIL|VM_RESULT_FAIL|AUDIT_FAULT_FAIL|AUDIT_ACCOUNTING_FAIL)|BUG:|WARNING:|Oops:|Kernel panic|Call trace:', text):
-        raise ValueError('guest/kernel failure reported')
     allocations = list(re.finditer(r'DMA_AUDIT_ALLOC id=([1-9][0-9]*) mode=([01]) bytes=4194304 fault=([01])\r?\n', text))
     releases = list(re.finditer(r'DMA_AUDIT_RELEASE id=([1-9][0-9]*) mode=([01])\r?\n', text))
     if (len(allocations) != 4 or len(releases) != 4 or

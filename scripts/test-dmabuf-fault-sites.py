@@ -3,17 +3,39 @@
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 import tempfile
+import hashlib
+import os
 from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 module = SourceFileLoader('dma_fault_sites', str(ROOT / 'scripts/prepare-dmabuf-fault-sites.py')).load_module()
-SOURCE = ROOT.parent.parent / 'outputs/stock-dmabuf-overlay-20261005-v4/candidate/mm/huge_memory.c'
+prepare = SourceFileLoader('fault_site_candidate',str(ROOT/'scripts/prepare-dmabuf-reimplementation.py')).load_module()
+REFERENCE = Path(os.environ.get('DMA_ACK_REFERENCE',str(ROOT.parent.parent/'outputs/stock-ack-dmabuf-overlay-reference-20261005')))
+
+
+def current_candidate():
+    source, recipes = {}, {}
+    for name,sha in prepare.SOURCES.items():
+        data = (REFERENCE/name).read_bytes()
+        if hashlib.sha256(data).hexdigest() != sha:
+            raise ValueError('ACK source drift')
+        source[name] = data.decode()
+    for name,sha in prepare.RECIPES.items():
+        data = (ROOT/'tools/stock-recovery'/('dmabuf_huge_'+name+'.recovered.c')).read_bytes()
+        if hashlib.sha256(data).hexdigest() != sha:
+            raise ValueError('recipe drift')
+        recipes[name] = data.decode()
+    return prepare.candidate(source,recipes)['mm/huge_memory.c'].encode()
 
 
 class Sites(unittest.TestCase):
     def setUp(self):
-        self.data = SOURCE.read_bytes()
+        self.data = current_candidate()
+        self.fixture = tempfile.TemporaryDirectory(prefix='dma-current-fault-source-')
+        self.addCleanup(self.fixture.cleanup)
+        self.source = Path(self.fixture.name)/'huge_memory.c'
+        self.source.write_bytes(self.data)
 
     def test_two_sites_and_outside_function_preserved(self):
         before = self.data.decode()
@@ -55,13 +77,13 @@ class Sites(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='dma-fault-sites-test-') as temporary:
             folder = Path(temporary)
             link = folder / 'source'
-            link.symlink_to(SOURCE)
+            link.symlink_to(self.source)
             with self.assertRaises(ValueError):
                 module.run(SimpleNamespace(source=link, output=folder / 'evidence'))
             output = folder / 'evidence'
             output.symlink_to(folder / 'missing')
             with self.assertRaises(ValueError):
-                module.run(SimpleNamespace(source=SOURCE, output=output))
+                module.run(SimpleNamespace(source=self.source, output=output))
 
 
 if __name__ == '__main__':

@@ -774,6 +774,43 @@ por polling timeout; verificar estado terminal antes de próxima execução.
 Proposta §B futura: semantic fixture ≠ integration-header compile proof,
 sob V35/V39; SPEC não alterada silenciosamente.
 
+### Checkpoint — cold-PUD runtime panic rastreado, predicate corrigido
+
+Run37513469218 (e5f1016): Kbuild/providers/address-registration pass; QEMU
+failure. Artifact dma-producer-compile-9 preservado em
+outputs/dma-export-vm-37513469218. Serial real: quatro misc/lifetime/unwind
+casos passaram; DMA-BUF4K/64K incluindo hint passaram. Primeiro DMA-BUF2M
+hint0x40001000→0x40200000 panic em _raw_spin_lock, lr remap+0x33c,
+pointer inválido0xffffffffff000028. Não é pass de integração.
+ImageSHA940e65a369cc1e47a548d9c98244e66149bc4d1a4fcd1a53088359aa75b12ace;
+initramfsSHA75359f06535410ea50acc693399e74cd3b9b0605a177d9819f54ece05737a4c5.
+Guest-source37512914935 completou success; isso prova compilação, não runtime.
+
+Causa comprovada no código: recovered mapper usava pgd_none(*pgd) antes de
+__pmd_alloc. ACK nop4d pgd_none retorna0; nopud p4d_none retorna0.
+ARM64 pud_none testa !pud_val. Nesse geometry3-level, primeira entrada real
+é PUD alias do slot pgd. Stock0xffffffc0803bb9f0 LDR +9f4 CBZ testa entry
+zero e chama __pmd_alloc em0xffffffc0803bba34. C antigo pulava allocator
+quando slot vazio; decode__va(0) → pointer inválido ao buscar PMD lock.
+Mocks antigos pgd_none=!raw mascaravam diferença; VM antiga usava PGD já
+populado. Novo endereço baixo revelou delta, não hazard intencional stock.
+
+Fix: pud_none(*(pud_t *)pgd), sem alterar condição stock ou export/ABI.
+PMD fixture agora define folded pgd_none=0 e real pud_none. 216PMD+360PTE
+exact ARM64 cases passaram. Nova regressão compila helper definitions dos
+três headers ACK imutáveis e condição real C: zero/nonzero + allocator failure;
+old-predicate variant falha. Prova branch/helper semantics, não allocator/MMU.
+Headers em outputs/stock-ack-dma-folded-reference-20261006.
+
+Overlay regenerado em outputs/stock-dmabuf-overlay-20261006-v5 e canonical
+review patch/manifest atualizados; recipe SHA8c037458747db7632df2f2a02c5fb816958418dd097b6e303c5ef5fd0e0e79fb.
+Fault-site tests agora geram input do candidate atual pin-verificado, não
+artefato v4 histórico. Runner prioriza Oops/panic antes de missing marker.
+Proposta §B futura/V39: folded predicates ! native-definition regressions;
+fixture routing ≠ native-helper integration. SPEC não editada sem aprovação.
+Nova VM real obrigatória, remaining failures/complete lifecycle/KMI/root/
+hardware continuam pendentes; não shipping/flash, T20 continua ~.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

@@ -30,8 +30,11 @@ int dmabuf_huge_remap_pfn_range(struct vm_area_struct *vma,
 
 		if (!pgd)
 			return -ENOMEM;
-		/* pud folds into pgd in this exact three-level stock. */
-		if (pgd_none(*pgd) && __pmd_alloc(mm, (pud_t *)pgd, address))
+		/* PUD is the first real entry in this three-level geometry.
+		 * pgd_none is a folded-level constant false, NOT a raw zero test.
+		 * Stock LDR/CBZ tests this aliased PUD entry before __pmd_alloc.
+		 */
+		if (pud_none(*(pud_t *)pgd) && __pmd_alloc(mm, (pud_t *)pgd, address))
 			return -ENOMEM;
 		pmd = (pmd_t *)__va(pgd_val(*pgd) & 0x7ffffff000UL);
 		pmd += (address >> 21) & 511;
