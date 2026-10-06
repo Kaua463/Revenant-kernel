@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 validator = SourceFileLoader('runtime_dma_validator', str(ROOT / 'scripts/validate-dmabuf-overlay.py')).load_module()
 fault_sites = SourceFileLoader('runtime_dma_fault_sites', str(ROOT / 'scripts/prepare-dmabuf-fault-sites.py')).load_module()
 PINS = {
-    'recovered-dma-audit.c': 'e338037673e962ececf0750bd2cc14baaf7ed58bb3319a2148dd9b000e31207e',
+    'recovered-dma-audit.c': 'adcfd670cf98a6d9f12ac8484ac6defb43173e46b78e5c7538a9d1ef7b0a9fc8',
     'recovered-dma-export-audit.c': 'ec4cf6663865992215d3d130a86cea978c02ee09514e8f081ca7bb0672de9b13',
     'audit-export-contract.h': '442bce26daf008e6f00564ce89dd9a8c1410e6326aa5cb23b45946a1cce8a13a',
     'audit-fault-plan.h': 'd048158044314fd7ae69a4250cf7ea9e13299986deea3709b1baef35cd5b99f5',

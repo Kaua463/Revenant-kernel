@@ -135,7 +135,7 @@ static void exercise(const char *device, int inject)
 		result = mmap(hole, BYTES, PROT_READ | PROT_WRITE,
 			      MAP_SHARED | MAP_FIXED, fd, 0);
 		if (result != MAP_FAILED || errno != ENOMEM)
-			fail("injected second allocation did not return ENOMEM");
+			fail("injected leaf allocation did not return ENOMEM");
 		errno = 0;
 		if (!mincore(hole, BYTES, residency) || errno != ENOMEM)
 			fail("failed mmap left a VMA");
@@ -337,6 +337,8 @@ int main(int argc, char **argv)
 	exercise("/dev/recovered-dma-audit-pte", 0);
 	exercise("/dev/recovered-dma-audit-fault-pmd", 1);
 	exercise("/dev/recovered-dma-audit-fault-pte", 1);
+	exercise("/dev/recovered-dma-audit-first-pmd", 1);
+	exercise("/dev/recovered-dma-audit-first-pte", 1);
 	exercise_export(0);
 	exercise_export(1);
 	puts("DMA_GUEST_PASS: basic mmap/fork/move/split/lifetime/SMP workload only");

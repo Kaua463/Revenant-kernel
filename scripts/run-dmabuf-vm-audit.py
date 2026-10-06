@@ -28,27 +28,33 @@ def check_log(text):
                    'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-pte',
                    'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-fault-pmd',
                    'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-fault-pte',
+                   'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-first-pmd',
+                   'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-first-pte',
                    'DMA_GUEST_PASS:', 'DMA_VM_RESULT_PASS:'):
         if text.count(marker) != 1:
             raise ValueError('missing/duplicate guest completion: ' + marker)
     allocations = list(re.finditer(r'DMA_AUDIT_ALLOC id=([1-9][0-9]*) mode=([01]) bytes=4194304 fault=([01])\r?\n', text))
     releases = list(re.finditer(r'DMA_AUDIT_RELEASE id=([1-9][0-9]*) mode=([01])\r?\n', text))
-    if (len(allocations) != 4 or len(releases) != 4 or
-            text.count('DMA_AUDIT_ALLOC') != 4 or text.count('DMA_AUDIT_RELEASE') != 4):
+    if (len(allocations) != 6 or len(releases) != 6 or
+            text.count('DMA_AUDIT_ALLOC') != 6 or text.count('DMA_AUDIT_RELEASE') != 6):
         raise ValueError('missing/duplicate/malformed allocation or final release')
-    if len({match.group(1) for match in allocations}) != 4:
+    if len({match.group(1) for match in allocations}) != 6:
         raise ValueError('allocation IDs must be unique')
-    faults = list(re.finditer(r'DMA_AUDIT_FAULT id=([1-9][0-9]*) mode=([01]) ordinal=2 published=1 table=1\r?\n', text))
+    faults = list(re.finditer(r'DMA_AUDIT_FAULT id=([1-9][0-9]*) mode=([01]) ordinal=([12]) published=([01]) table=([01])\r?\n', text))
     returns = list(re.finditer(r'DMA_AUDIT_FAULT_RETURN id=([1-9][0-9]*) mode=([01]) result=-12 fired=1\r?\n', text))
     unwinds = list(re.finditer(r'DMA_AUDIT_UNWIND id=([1-9][0-9]*) mode=([01]) before=([0-9]+) partial=([0-9]+) retry=([0-9]+)\r?\n', text))
-    if len(unwinds) != 2 or text.count('DMA_AUDIT_UNWIND') != 2:
+    if len(unwinds) != 4 or text.count('DMA_AUDIT_UNWIND') != 4:
         raise ValueError('missing/duplicate/malformed page-table accounting evidence')
-    if (len(faults) != 2 or len(returns) != 2 or text.count('DMA_AUDIT_FAULT id=') != 2 or
-            text.count('DMA_AUDIT_FAULT_RETURN') != 2 or text.count('DMA_GUEST_ENOMEM_PASS:') != 2):
+    if (len(faults) != 4 or len(returns) != 4 or text.count('DMA_AUDIT_FAULT id=') != 4 or
+            text.count('DMA_AUDIT_FAULT_RETURN') != 4 or text.count('DMA_GUEST_ENOMEM_PASS:') != 4):
         raise ValueError('missing/duplicate/malformed partial ENOMEM evidence')
     for mode, device, inject in ((0, 'pmd', 0), (1, 'pte', 0),
-                                 (0, 'fault-pmd', 1), (1, 'fault-pte', 1)):
+                                 (0, 'fault-pmd', 2), (1, 'fault-pte', 2),
+                                 (0, 'first-pmd', 1), (1, 'first-pte', 1)):
         allocated = [match for match in allocations if match.group(2) == str(mode) and match.group(3) == str(inject)]
+        if inject:
+            scenario_ids = {m.group(1) for m in faults if m.group(2,3) == (str(mode),str(inject))}
+            allocated = [m for m in allocations if m.group(2,3) == (str(mode),'1') and m.group(1) in scenario_ids]
         if len(allocated) != 1:
             raise ValueError('missing/duplicate mode allocation: ' + device)
         allocation = allocated[0]
@@ -72,7 +78,9 @@ def check_log(text):
             if len(fired) != 1 or len(returned) != 1 or len(unwound) != 1 or text.count(retry) != 1:
                 raise ValueError('partial ENOMEM ID/mode/retry mismatch: ' + device)
             before, partial, after = map(int, unwound[0].group(3, 4, 5))
-            if before % 4096 or after != before or partial - before not in (4096, 8192):
+            if fired[0].group(3,4,5) != (str(inject),str(inject-1),str(inject-1)):
+                raise ValueError('fault ordinal/publication mismatch: ' + device)
+            if before % 4096 or after != before or partial - before not in ((0,4096) if inject == 1 else (4096,8192)):
                 raise ValueError('page-table accounting did not return to baseline: ' + device)
             if not allocation.start() < fired[0].start() < returned[0].start() < unwound[0].start() < text.index(retry) < text.index(boundary):
                 raise ValueError('partial ENOMEM lifetime order wrong: ' + device)
@@ -153,8 +161,8 @@ def run(args):
         'failure': reason, 'command': cmd,
         'kernel_sha256': hashlib.sha256(image).hexdigest(),
         'initramfs_sha256': hashlib.sha256(initramfs).hexdigest(),
-        'verified': ['basic guest workload', 'four file-owned buffers freed exactly once after final unmap',
-                     'PMD/PTE ordinal-two ENOMEM after one published block; same-address retry',
+        'verified': ['basic guest workload', 'six file-owned buffers freed exactly once after final unmap',
+                     'PMD/PTE first and second leaf ENOMEM; publication checks and same-address retry',
                      'page-table accounting returns to baseline after selected partial ENOMEM',
                      'real DMA-BUF core to exporter mmap, 4K/64K/2M/4M alignment including nonaligned hints',
                      'two DMA-BUF-owned buffers survive fd close/fork/move until final unmap'] if reason is None else [],

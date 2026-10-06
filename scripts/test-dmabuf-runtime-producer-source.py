@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Source-policy regression only: NOT Kbuild or MMU/lifetime proof."""
 from pathlib import Path
+import subprocess
+import tempfile
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1] / 'tools/stock-recovery/runtime-audit'
@@ -29,7 +32,11 @@ def validate(source, config, makefile):
         'mutex_unlock(&audit_fault_mutex)',
         'dma_audit_fault_check(&audit_fault_plan, (unsigned long)current,',
         '(unsigned long)mm)',
-        'if (published != 1 || !table_present)',
+        'if (published != audit_fault_plan.ordinal - 1 ||',
+        'table_present != (audit_fault_plan.ordinal == 2)',
+        'buffer->fault_ordinal',
+        'misc_deregister(&audit_first_pmd_device)',
+        'misc_deregister(&audit_fault_pte_device)',
         'table_present = audit_first_block_present(map_type);',
         'pmd_pfn(*pmd) == audit_fault_first_pfn',
         'pte_pfn(pte[index]) != audit_fault_first_pfn + index',
@@ -56,8 +63,8 @@ def validate(source, config, makefile):
                   'vm_file =', 'module_init(', 'module_exit('):
         if token in source:
             raise ValueError('forbidden audit interface: ' + token)
-    if source.count('.mode = 0600') != 4:
-        raise ValueError('all four devices must be root-only')
+    if source.count('.mode = 0600') != 6:
+        raise ValueError('all six devices must be root-only')
     release = source.split('static int audit_release(', 1)[1].split('static bool audit_empty_destination', 1)[0]
     if not release.index('__free_pages(') < release.index('kfree(buffer);') < release.index('pr_info('):
         raise ValueError('release event must follow both real frees')
@@ -72,6 +79,55 @@ def validate(source, config, makefile):
 
 
 class SourcePolicy(unittest.TestCase):
+    def test_guest_mapper_cases_and_init_nodes_match_producer_inventory(self):
+        names = re.findall(r'\.name = "(recovered-dma-audit-[^"]+)"',self.source)
+        self.assertEqual(len(names),6)
+        self.assertEqual(len(set(names)),6)
+        guest = (ROOT/'guest-workload.c').read_text()
+        cases = re.findall(r'\bexercise\("/dev/([^"]+)", [01]\);',guest)
+        self.assertCountEqual(cases,names)
+        init = (ROOT/'guest-init.c').read_text()
+        nodes = re.findall(r'\bmake_audit_node\("([^"]+)"\);',init)
+        self.assertCountEqual(nodes,names+['recovered-dma-export-audit'])
+
+    def test_each_misc_registration_failure_unwinds_exactly_once(self):
+        body = self.source.split('static int __init audit_init(void)',1)[1].split('device_initcall',1)[0]
+        names = ('audit_pmd_device','audit_pte_device','audit_fault_pmd_device',
+                 'audit_fault_pte_device','audit_first_pmd_device','audit_first_pte_device')
+        fixture = '''#include <assert.h>
+struct miscdevice { int index; };
+static int fail_at, registered, removed, seen[6], gone[6];
+static int misc_register(struct miscdevice *d) {
+ assert(registered < 6); seen[registered++] = d->index;
+ return d->index == fail_at ? -19 : 0;
+}
+static void misc_deregister(struct miscdevice *d) {
+ assert(removed < 6); gone[removed++] = d->index;
+}
+''' + '\n'.join(f'static struct miscdevice {name} = {{{index}}};' for index,name in enumerate(names)) + '''
+static int audit_init(void)''' + body + '''
+int main(void) {
+ for (fail_at = -1; fail_at < 6; fail_at++) {
+  registered = removed = 0;
+  int result = audit_init();
+  assert(result == (fail_at < 0 ? 0 : -19));
+  assert(registered == (fail_at < 0 ? 6 : fail_at+1));
+  assert(removed == (fail_at < 0 ? 0 : fail_at));
+  for (int i=0; i<registered; i++) assert(seen[i] == i);
+  for (int i=0; i<removed; i++) assert(gone[i] == fail_at-i-1);
+ }
+ return 0;
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='dma-misc-unwind-') as temporary:
+            path = Path(temporary)/'unwind.c'
+            path.write_text(fixture)
+            executable = path.with_suffix('')
+            subprocess.run(['clang','-std=c11','-Wall','-Wextra','-Werror',
+                            '-fsanitize=address,undefined',str(path),'-o',str(executable)],
+                           check=True,timeout=30)
+            subprocess.run([str(executable)],check=True,timeout=30)
+
     def setUp(self):
         self.source = (ROOT / 'recovered-dma-audit.c').read_text()
         self.config = (ROOT / 'Kconfig').read_text()
@@ -120,7 +176,7 @@ class SourcePolicy(unittest.TestCase):
         for token in ('lockdep_assert_held(&audit_fault_mutex)',
                       'mutex_lock(&audit_fault_mutex)', 'mutex_unlock(&audit_fault_mutex)',
                       'dma_audit_fault_check(&audit_fault_plan, (unsigned long)current,',
-                      '(unsigned long)mm)', 'if (published != 1 || !table_present)',
+                      '(unsigned long)mm)', 'if (published != audit_fault_plan.ordinal - 1 ||',
                       'table_present = audit_first_block_present(map_type);',
                       'audit_fault_plan = (struct dma_audit_fault_plan){0};',
                       'buffer->fault_pending = false;', 'goto undo_fault_pmd;',

@@ -88,10 +88,10 @@ def run(args):
         'scope': 'only recovered remap function; built-in VM audit config',
         'coverage': {
             'leaf_ordinal_2': 'existing guest; current Image needs VM validation',
-            'leaf_ordinal_1': 'selector supported; guest not implemented',
+            'leaf_ordinal_1': 'first-pmd/first-pte guest implemented; VM not validated',
             'pmd_table': 'callback wired but dormant; guest arm not implemented',
         },
-        'pending': ['first-leaf and cold-PUD guest arm/ENOMEM/retry assertions',
+        'pending': ['first-leaf VM execution; cold-PUD guest arm/ENOMEM/retry assertions',
                     'all allocation failures and complete unwind runtime'],
     }
     (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')

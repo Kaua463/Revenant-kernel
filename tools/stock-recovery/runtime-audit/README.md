@@ -51,6 +51,9 @@ zeroed, contiguous 4 MiB order-10 allocation, released by the last file release.
 Two additional 0600 devices `recovered-dma-audit-fault-pmd`/`-fault-pte` have
 the same restrictions, but inject ordinal-two allocation failure on the first
 valid mmap only. The normal devices do not arm failure injection.
+`recovered-dma-audit-first-pmd`/`-first-pte` add first-leaf failure cases with
+the same capability/0600/ownership limits. They are implemented but not yet
+validated in a VM. All six cases run the full retry/alias/fork/move/SMP workload.
 High-order allocation can legitimately fail; no fallback to arbitrary memory.
 Mappings may cover aligned 2 or 4 MiB subsets, shared and non-executable only.
 The mmap callback validates overflow/bounds, checks every actual destination
@@ -120,17 +123,18 @@ python3 scripts/test-dmabuf-fault-sites.py
 ```
 
 The producer supplies callbacks under its audit-only remap mutex. Only
-the matching site and armed current task/mm advance the ordinal; the second leaf allocation
-returns ENOMEM after the matching recovered map counter increased exactly once.
+the matching site and armed current task/mm advance the ordinal. Ordinal two
+returns ENOMEM after the matching recovered map counter increased exactly once;
+ordinal one requires zero published blocks and no first-block mapping.
 It also walks the actual first block: present huge PMD with the owned PFN, or
 all 512 present/special PTEs with the consecutive owned PFNs. Counter increase
 alone cannot prove publication because stock ignores `pmd_set_huge`'s return.
 The guest checks ENOMEM, mincore ENOMEM (no VMA), same-address NOREPLACE retry
 (including the producer's no-stale-table preflight), every data word and full
-basic alias/fork/move/split/SMP workload after retry. Four allocation/release IDs,
-two partial-map/failure/retry event sequences and strict final-unmap ordering
-are required in serial. Run 37494587692 passed these new assertions; older
-37428061875 basic evidence does not prove them.
+basic alias/fork/move/split/SMP workload after retry. The current gate requires
+six allocation/release IDs and four failure/retry sequences with exact ordinals,
+publication state and strict final-unmap ordering. Run 37494587692 passed the
+older four-buffer/ordinal-two assertions only, not the new first-leaf cases.
 This deliberately injects the allocation-failure outcome at the exact call
 site, not a global allocator failure; other allocation sites/accounting and full
 hardware lifetimes still require additional gates.
@@ -138,7 +142,9 @@ New accounting gate (runtime pending): read the pinned ACK
 `mm_pgtables_bytes()` before the failing remap, after the first block is
 published and at entry to the same task/mm's retry. It requires a temporary
 increase of one or two 4 KiB table pages, then exact return to the baseline
-before allocating for retry. The failed-mmap guest sequence has no worker
+before allocating for retry. First-leaf failure permits exactly zero or one
+4 KiB table page temporarily and also requires exact baseline restoration.
+The failed-mmap guest sequence has no worker
 threads during this interval. Tokens are compared, never dereferenced after the
 callback; this is bounded audit instrumentation, not a production ownership API.
 `DMA_AUDIT_UNWIND` must match the fault ID/mode and precede the guest's successful
@@ -164,7 +170,8 @@ include that runner-specific regression. Canonical patch/path/hash gates remain
 unchanged.
 
 `guest-init.c` is static PID1 for the RAM archive only: mounts proc/sysfs,
-creates exactly the four misc nodes from their technical sysfs dev numbers,
+creates exactly six mapper misc nodes plus the DMA-BUF exporter factory from
+their technical sysfs dev numbers,
 executes the workload and powers off. GKI has no built-in devtmpfs here, so the
 archive includes only the standard 5:1 console node; audit nodes are discovered,
 not guessed. `build-dmabuf-vm-initramfs.py` requires static AArch64 ELF executables,
@@ -174,7 +181,7 @@ decode the archive independently and reject dynamic/wrong/truncated ELF/overwrit
 `run-dmabuf-vm-audit.py` checks built-in VM prerequisites and ARM64 Image magic,
 then runs four-CPU QEMU virt with no network, disks, monitor or host-directory
 shares, with bounded timeout. It saves serial logs on timeout/failure and
-requires both device-case markers, guest and PID1 completion, no panic/BUG/Oops/
+requires all six mapper-case markers, both exporter cases, guest and PID1 completion, no panic/BUG/Oops/
 warning, plus QEMU zero exit. Runner mock tests are **not VM execution**.
 Producer workflow now includes this runtime step with ephemeral binaries/archive;
 only logs/config/reports/tool versions are uploaded, never kernel or flash files.

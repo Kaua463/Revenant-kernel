@@ -833,6 +833,28 @@ erro mecânico de invocação, corrigido para runtime-producer-source.py9pass,
 não foi falha de código ou resultado de kernel. V35/V39 continuam aplicados.
 T20 permanece ~; guest failures restantes, KMI/root/SMP/hardware pendentes.
 
+### Checkpoint — first-leaf guest e gates locais implementados
+
+T20/V35/V39, sem flash/shipping; commit anterior2d7418f local, não enviado
+enquanto VM37519394415 pending/jobs=[] no head0ab92e4. Novo produtor adiciona
+first-pmd/first-pte root0600/CAP_SYS_ADMIN com buffer próprio4M por open.
+Primeiro mmap válido arma LEAF ordinal1; dispositivos fault-* continuam2.
+Callback verifica publicação0/table0 para1, publicação1/table1 para2.
+Guest usa ENOMEM/mincore no VMA, retry NOREPLACE mesmoVA, full data e depois
+mesmo alias/fork/move/protect/unmap/reader/SMP workload dos outros casos.
+Accounting1 aceita somente delta0/4K;2 somente4K/8K, retry exact baseline.
+Não presumir unwind nativo: esses novos casos ainda precisam VM real.
+
+Parser exige seis IDs allocation/release, quatro falhas por ID/mode/ordinal,
+estado publicado exato, accounting+retry+lastunmap/release ordering.
+Negativas cobrem first-leaf com publicação falsa, ID/mode/ordinal trocado,
+leak/underflow/baseline incorreto e markers ausentes. Histórico4casos não
+passa gate6 atual: não reclassificar artifacts antigos como pass novo.
+Novo teste compila audit_init real em hostASan/UBSan e falha cada um dos seis
+misc_register: deregister reverse apenas providers previamente registrados,
+exatamente uma vez; sucesso registra todos sem deregister. Não Kbuild proof.
+PMD_TABLE callback permanece dormant; guest cold-PUD failure ainda pendente.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

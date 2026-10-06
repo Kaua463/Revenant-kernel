@@ -133,7 +133,7 @@ int main(void) {
             report = json.loads((args.output/'report.json').read_text())
             self.assertEqual(len(report['sites']), 3)
             self.assertIn('dormant', report['coverage']['pmd_table'])
-            self.assertIn('not implemented', report['coverage']['leaf_ordinal_1'])
+            self.assertIn('VM not validated', report['coverage']['leaf_ordinal_1'])
             with self.assertRaises(ValueError):
                 module.run(args)
             self.assertEqual((args.output / 'huge_memory.c').read_bytes(), result)

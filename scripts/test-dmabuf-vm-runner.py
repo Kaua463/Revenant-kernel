@@ -13,12 +13,14 @@ module = SourceFileLoader('dma_vm_runner', str(Path(__file__).with_name('run-dma
 def mock_pass():
     lines = []
     for identity, mode, device, inject in ((1, 0, 'pmd', 0), (2, 1, 'pte', 0),
-                                           (3, 0, 'fault-pmd', 1), (4, 1, 'fault-pte', 1)):
-        lines.append(f'DMA_AUDIT_ALLOC id={identity} mode={mode} bytes=4194304 fault={inject}')
+                                           (3, 0, 'fault-pmd', 2), (4, 1, 'fault-pte', 2),
+                                           (5, 0, 'first-pmd', 1), (6, 1, 'first-pte', 1)):
+        lines.append(f'DMA_AUDIT_ALLOC id={identity} mode={mode} bytes=4194304 fault={int(bool(inject))}')
         if inject:
-            lines.extend((f'DMA_AUDIT_FAULT id={identity} mode={mode} ordinal=2 published=1 table=1',
+            partial = 16384 if inject == 2 else 12288
+            lines.extend((f'DMA_AUDIT_FAULT id={identity} mode={mode} ordinal={inject} published={inject-1} table={inject-1}',
                           f'DMA_AUDIT_FAULT_RETURN id={identity} mode={mode} result=-12 fired=1',
-                          f'DMA_AUDIT_UNWIND id={identity} mode={mode} before=12288 partial=16384 retry=12288',
+                          f'DMA_AUDIT_UNWIND id={identity} mode={mode} before=12288 partial={partial} retry=12288',
                           f'DMA_GUEST_ENOMEM_PASS: /dev/recovered-dma-audit-{device} same_address_retry=1'))
         lines.extend((f'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-{device}',
                       f'DMA_AUDIT_RELEASE id={identity} mode={mode}',
@@ -40,6 +42,31 @@ PASS = mock_pass()
 
 
 class Runner(unittest.TestCase):
+    def test_first_leaf_requires_zero_publication_and_restored_accounting(self):
+        original = 'DMA_AUDIT_FAULT id=5 mode=0 ordinal=1 published=0 table=0'
+        for replacement in (
+                original.replace('ordinal=1', 'ordinal=2'),
+                original.replace('published=0', 'published=1'),
+                original.replace('table=0', 'table=1'),
+                original.replace('id=5', 'id=3'),
+                original.replace('mode=0', 'mode=1'), ''):
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                module.check_log(PASS.replace(original,replacement))
+        accounting = 'DMA_AUDIT_UNWIND id=5 mode=0 before=12288 partial=12288 retry=12288'
+        module.check_log(PASS.replace(accounting,accounting.replace('partial=12288','partial=16384')))
+        for replacement in (
+                accounting.replace('partial=12288','partial=20480'),
+                accounting.replace('partial=12288','partial=8192'),
+                accounting.replace('retry=12288','retry=16384'),
+                accounting.replace('id=5','id=6'), ''):
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                module.check_log(PASS.replace(accounting,replacement))
+        for marker in ('DMA_GUEST_ENOMEM_PASS: /dev/recovered-dma-audit-first-pmd same_address_retry=1',
+                       'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-first-pmd',
+                       'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-first-pmd reader_passes=1'):
+            with self.subTest(marker=marker), self.assertRaises(ValueError):
+                module.check_log(PASS.replace(marker,''))
+
     def test_kernel_error_precedes_missing_completion_diagnostic(self):
         with self.assertRaisesRegex(ValueError,'guest/kernel failure reported: Oops:'):
             module.check_log('Internal error: Oops: bad pointer\nKernel panic\n')
