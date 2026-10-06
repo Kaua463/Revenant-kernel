@@ -256,6 +256,14 @@ Atualização: geração atual `outputs/stock-dmabuf-overlay-20261005-v4` acresc
 
 Regressão após overlay: wrappers/range/zap/split/move/fork/unmap/move-caller/VMA/split-VMA, seis modos remap anteriores, dois modos split-unmap com retirada+RCU, PTE-remap 360 e RCU 16 sequências passaram; split isolado default 200. Recipes originais preservadas. Três suites novas totalizam 15 testes (gerador, validator, config/provider gates); composição SUSFS passou separadamente. Auditoria Actions será disparada somente depois desses gates locais, sem installer/release/flash.
 
+### Gate de composição DMA depois do SUSFS
+
+`validate-dmabuf-susfs-overlay.py` acrescenta validação separada, sem relaxar o validator pristine nem alterar o manifest global KSUN/SUSFS. Reconstrói duas árvores descartáveis a partir dos 11 inputs ACK exatos: SUSFS sem DMA e SUSFS com DMA. Patch SUSFS é lido do objeto be7b7ef49a1e1b189c3abf00eacaa7ebdb4168c1 e validado por SHA256; interseção com todos os inputs DMA deve ser somente mm/memory.c. Overlay original primeiro passa pelo validator canônico completo. Todos os preimages da árvore alvo e todos os postimages são cotejados byte/hash; qualquer alteração extra, symlink ou header existente bloqueia antes de aplicar. Evidência opcional não sobrescreve arquivo existente. `--apply-review` permitido apenas na árvore de build descartável; não gera installer.
+
+`test-dmabuf-susfs-overlay.py`: seis testes passaram, cobrindo dry-run sem mutação, aplicação/resultado e repetição rejeitada, drift em memory.c e mm_types.h, reference drift, patch drift, header próprio/symlink e evidência própria preservada antes de qualquer write. A receita DMA não mudou. Gate cobre **somente os inputs DMA**, não confirma por si só toda a integração root. Próxima integração deve executar primeiro o script KSUN/SUSFS original até seu ordered manifest final, depois este gate; ainda pendentes build composto, KMI, produtor/unwind, callbacks/refcounts, MMU/SMP/hardware. Nenhum device/flash.
+
+Auditoria isolada Actions 37406739074, head 96eaa013b59c682058a168be65b2109810944e8a: último snapshot deste checkpoint comprova Fetch pinned ACK e Apply exact review overlay com sucesso; Compile audit kernel do perfil disabled em execução, enabled na fila. Não é resultado de compilação concluída.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.
