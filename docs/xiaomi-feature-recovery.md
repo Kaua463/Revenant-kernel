@@ -160,6 +160,14 @@ BTF adicional valida mmu_gather size/offsets/cleared_pmds e delta int32 de __mod
 
 Regressão após modo zap: todos os diferenciais DMA anteriores + modo zap + deposit/pmd_set/BTF passaram (split 200 default). Ambos os modos preservam os 216 inputs de remap e seus rejects/BUGs; BTF/fonte/config seguem fail-closed.
 
+### Encadeamento remap → move na mesma página PMD → zap
+
+Modo `--teardown move-zap` executa corpo move_dmabuf_huge_pmd stock entre remap e zap, contra C reconstruído existente, sem reinicializar owner/list ou tabelas. 173 moves na mesma página de PMDs, 16 cadeias de falha parcial prévia; clearing old/publicação new/retorno/accounting/metadados/helper/barrier/TLBI trace comparados após cada etapa. Depósitos e metadados permanecem byte-a-byte iguais durante move; depois os destinos são removidos, owner drena, pgtables_bytes restaura inicial, 123 zaps repetidos não free novamente. Destinos privados ficam nos índices 128+ da mesma tabela PMD; não significa mremap de VMA real, apenas encadeamento dos helpers. Tabelas inicialmente vazias, nenhum mapeamento externo/remapeamento concorrente.
+
+Perfil arquitetural privado explícito: ASID=0, sem ASID pareado, range-TLBI, MTE ou notifier secundário; system_cpucaps BSS zero, mm.context/notifier_subscriptions zero. TLBI ASID é registrado com opcode/operando e pulado no emulador, não invalida MMU. Sync icache modelado; rmap false, file/anon NULL. Tipos/offsets BTF adicionais validados. Move dentro da mesma página PMD **não** executa transferência withdraw/deposit entre owners; esse ramo continua pendente neste encadeamento, apesar do teste isolado. Split, caller VMA/lifetime, SMP, alternativas aplicadas no boot e hardware continuam gates. Sem integrar/flash.
+
+Regressão após move-zap: suíte DMA completa, modos withdraw/zap/move-zap, helpers ACK separados e BTF passaram; split com default 200. Nenhuma mudança de recipe/produção/config/workflow/device.
+
 ### Callers: inventário dedicado e primeiro hook executado
 
 Preparação/decompilação `--scope dmabuf` gera somente dez funções DMA + onze callers/helpers pedidos, sem decompilar XRING/EROFS/outros recursos. Saída `outputs/stock-ghidra-20261005-dma-v6`, preparação `stock-decompiler-prep-20261005-dma-v6`: 21 corpos, 21 protótipos BTF, logs/status/manifest validados. Ghidra limitado a heap 1GiB e duas CPUs; processo terminou. Pseudocódigo permanece evidência não reimplementação.

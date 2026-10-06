@@ -46,7 +46,8 @@ struct page {uint64_t flags;struct list_head lru;unsigned char rest[40];};
 _Static_assert(sizeof(struct page)==64 && offsetof(struct page,lru)==8,"fixture page layout");
 typedef struct page *pgtable_t;
 struct mm_struct { uint64_t count;unsigned seq;pgd_t pgd; };
-struct vm_area_struct { unsigned long vm_start,vm_end,vm_flags,vm_pgoff;unsigned seq;struct mm_struct *vm_mm; };
+struct file {void *f_mapping;};
+struct vm_area_struct { unsigned long vm_start,vm_end,vm_flags,vm_pgoff;unsigned seq;struct mm_struct *vm_mm;struct file *vm_file;void *anon_vma; };
 static struct mm_struct mm;static pmd_t pmds[512];static struct page page_objects[8];
 static unsigned char (*pages)[64]=(void *)page_objects;static _Alignas(8) unsigned char pmd_metadata[64];
 static uint64_t rows[128][5],counter,other;static unsigned nr,allocs,fail,bug;static jmp_buf trap;
@@ -129,7 +130,7 @@ static void host_metadata(unsigned char *metadata){
  uint64_t owner;memcpy(&owner,metadata+528,8);if(owner)owner=0xfffffffe00050000ULL+owner-(uintptr_t)page_objects;memcpy(metadata+528,&owner,8);
 }
 unsigned host_remap(const uint64_t *in,uint64_t *out,uint64_t *trace_out,unsigned char *metadata) {
- struct vm_area_struct v={in[0],in[1],in[2],0xaabb,(unsigned)in[3],&mm};
+ struct vm_area_struct v={in[0],in[1],in[2],0xaabb,(unsigned)in[3],&mm,NULL,NULL};
  mm.seq=7;mm.count=in[4];mm.pgd.val=in[5];counter=in[6];other=0;fail=in[7];nr=allocs=bug=0;
  memset(pmds,0,sizeof(pmds));memset(page_objects,0xa5,sizeof(page_objects));memset(pmd_metadata,0xa5,64);memset(pmd_metadata+16,0,8);memset(pmd_metadata+40,0,4);
  for(unsigned i=0;i<8;i++){uint64_t flags=0;memcpy(pages[i],&flags,8);}
@@ -163,9 +164,33 @@ ZAP_WRAPPER=r'''
 void host_zap_reset(void){zap_counter=0;}
 unsigned host_zap_step(unsigned index,uint64_t address,unsigned first,uint64_t *out,uint64_t *trace_out,unsigned char *metadata,unsigned char *tlb_bytes){
  static struct mmu_gather t;if(first){memset(&t,0,sizeof(t));t.mm=&mm;t.start=UINT64_MAX;}nr=0;
- struct vm_area_struct v={0,0,0,0,0,&mm};int ret=zap_dmabuf_huge_pmd(&t,&v,&pmds[index],address);
+ struct vm_area_struct v={0,0,0,0,0,&mm,NULL,NULL};int ret=zap_dmabuf_huge_pmd(&t,&v,&pmds[index],address);
  out[0]=ret;out[1]=mm.count;out[2]=zap_counter;memcpy(out+3,pmds,sizeof(pmds));host_metadata(metadata);
  memcpy(tlb_bytes,&t,128);uint64_t m=0x1001000;memcpy(tlb_bytes,&m,8);
+ memcpy(trace_out,rows,nr*5*sizeof(uint64_t));return nr;
+}
+'''
+
+MOVE_FIXTURE=r'''
+static bool pmd_none(pmd_t p){return !p.val;}
+static bool pmd_present(pmd_t p){return !!(p.val&0xc00000000000001ULL);}
+/* File/anon are NULL in this chain; separate move tests cover rmap routes. */
+static void i_mmap_lock_write(void *p){(void)p;assert(0);}
+static void i_mmap_unlock_write(void *p){(void)p;assert(0);}
+static void anon_vma_lock_write(void *p){(void)p;assert(0);}
+static void anon_vma_unlock_write(void *p){(void)p;assert(0);}
+static void set_pmd_at(struct mm_struct *m,uint64_t a,pmd_t *p,pmd_t v){assert(m==&mm);(void)a;
+ if((v.val&0x400000000000001ULL)&&!(v.val&0x140000000000000ULL))trace(13,v.val,0,0,0);
+ p->val=v.val;if((v.val&0x40000000000041ULL)==0x40000000000001ULL){trace(10,0xd5033a9f,0,0,0);trace(10,0xd5033fdf,0,0,0);}}
+static void flush_tlb_range(struct vm_area_struct *v,uint64_t start,uint64_t end){assert(v->vm_mm==&mm);start&=~4095ULL;end=(end+4095)&~4095ULL;assert(end-start==HPAGE_PMD_SIZE);
+ /* Fixed explicit profile: ASID=0, no paired-ASID/range-TLBI/notifier. */
+ trace(10,0xd5033a9f,0,0,0);trace(14,0xd5088340,0,0,0);trace(10,0xd5033b9f,0,0,0);trace(10,0xd5033b9f,0,0,0);}
+'''
+MOVE_WRAPPER=r'''
+unsigned host_move_step(unsigned old_index,unsigned new_index,uint64_t old_address,uint64_t new_address,uint64_t *out,uint64_t *trace_out,unsigned char *metadata){
+ assert(old_index<512&&new_index<512);nr=0;bug=0;struct vm_area_struct v={0,0,0,0,0,&mm,NULL,NULL};bool ret=false;
+ if(!setjmp(trap))ret=move_dmabuf_huge_pmd(&v,old_address,new_address,&pmds[old_index],&pmds[new_index],false);
+ out[0]=ret;out[1]=mm.count;out[2]=bug;memcpy(out+3,pmds,sizeof(pmds));host_metadata(metadata);
  memcpy(trace_out,rows,nr*5*sizeof(uint64_t));return nr;
 }
 '''
@@ -208,30 +233,36 @@ def run(args):
     assert cleared&0xffffff==261 and cleared>>24==1
     func=next(t for t in btf.types if t['kind']==12 and t['name']=='__mod_lruvec_page_state');proto=btf.types[func['size']];delta=btf.types[proto['raw'][5]]
     assert delta['kind']==1 and delta['name']=='int' and delta['size']==4
+    for name,required in {'vm_area_struct':{'vm_file':128,'anon_vma':104},'mm_struct':{'context':0x3c8,'notifier_subscriptions':0x420}}.items():
+        ident=next(i for i,t in enumerate(btf.types) if t['kind']==4 and t['name']==name);found=fields(btf,ident)
+        for member,offset in required.items():assert found[member]==offset
     fixture=real_helper_fixture(args.image,kernel)
     recovered=Path(__file__).parents[1]/'tools/stock-recovery'
-    code=fixture+(recovered/'dmabuf_huge_remap.recovered.c').read_text()+ZAP_FIXTURE+(recovered/'dmabuf_huge_zap.recovered.c').read_text()+WRAPPER+ZAP_WRAPPER
+    code=fixture+(recovered/'dmabuf_huge_remap.recovered.c').read_text()+ZAP_FIXTURE+(recovered/'dmabuf_huge_zap.recovered.c').read_text()+MOVE_FIXTURE+(recovered/'dmabuf_huge_move.recovered.c').read_text()+WRAPPER+ZAP_WRAPPER+MOVE_WRAPPER
     with tempfile.TemporaryDirectory(prefix='dmabuf-remap-') as tmp:
         lib=Path(tmp)/'remap.dylib'
         subprocess.run(['clang','-x','c','-std=c11','-Wall','-Wextra','-Werror','-dynamiclib','-o',str(lib),'-'],input=code,text=True,check=True)
         host=ctypes.CDLL(str(lib));host.host_remap.argtypes=[ctypes.c_void_p]*4;host.host_remap.restype=ctypes.c_uint
         host.host_withdraw.argtypes=[ctypes.c_uint,ctypes.c_void_p];host.host_withdraw.restype=ctypes.c_uint64
         host.host_zap_reset.argtypes=[];host.host_zap_step.argtypes=[ctypes.c_uint,ctypes.c_uint64,ctypes.c_uint]+[ctypes.c_void_p]*4;host.host_zap_step.restype=ctypes.c_uint
+        host.host_move_step.argtypes=[ctypes.c_uint]*2+[ctypes.c_uint64]*2+[ctypes.c_void_p]*3;host.host_move_step.restype=ctypes.c_uint
         uc=Uc(UC_ARCH_ARM64,UC_MODE_ARM);uc.mem_map(kernel.base,(len(image)+4095)&~4095);uc.mem_write(kernel.base,image)
         ram=0x1000000;uc.mem_map(ram,0x20000)
         vma,mm,pgd,task,lock,stack,stop=[ram+x for x in (0,0x1000,0x2000,0x4000,0x6000,0xf000,0x10000)]
         direct=0xffffff8001000000;uc.mem_map(direct,4096)
         pages=0xfffffffe00050000;uc.mem_map(pages,4096)
         pmd_metadata=0xfffffffe00040000;uc.mem_map(pmd_metadata,4096)
+        cap=kernel.address('system_cpucaps');assert kernel.span('system_cpucaps') is None and kernel.symbols['system_cpucaps'][0][1]=='B';uc.mem_map(cap&~4095,4096)
         counter=kernel.address('dmabuf_hugetlb_pmd_map');assert kernel.span('dmabuf_hugetlb_pmd_map') is None
         uc.mem_map(counter&~4095,4096);uc.mem_write(kernel.address('memstart_addr'),bytes(8))
         names=('down_write','up_write','__pmd_alloc','__alloc_pages','__mod_lruvec_page_state','_raw_spin_lock','pgtable_trans_huge_deposit','pmd_set_huge','_raw_spin_unlock')
         funcs={kernel.address(n):i+1 for i,n in enumerate(names)};trace=[];state={}
         funcs[kernel.address('__free_pages')]=11;funcs[kernel.address('pgtable_trans_huge_withdraw')]=12
+        funcs[kernel.address('__sync_icache_dcache')]=13
         def hook(emu,address,size,user):
             if address in funcs:
                 op=funcs[address];x=[emu.reg_read(r) for r in (UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3)]
-                trace.append((op,*[x[i]&0xffffffff if op==5 and i==2 else x[i] if i<({1:1,2:1,3:3,4:4,5:3,6:1,7:3,8:3,9:1,11:2,12:2}[op]) else 0 for i in range(4)]))
+                trace.append((op,*[x[i]&0xffffffff if op==5 and i==2 else x[i] if i<({1:1,2:1,3:3,4:4,5:3,6:1,7:3,8:3,9:1,11:2,12:2,13:1}[op]) else 0 for i in range(4)]))
                 result=0
                 if op in (7,8,12):return # Observe calls, execute original stock helpers.
                 if op==3:
@@ -246,10 +277,13 @@ def run(args):
                 emu.reg_write(UC_ARM64_REG_X0,result);emu.reg_write(UC_ARM64_REG_PC,emu.reg_read(UC_ARM64_REG_X30))
             elif kernel.base<=address<kernel.base+len(image):
                 word=struct.unpack_from('<I',image,address-kernel.base)[0]
-                if word in (0xd5033a9f,0xd5033fdf):trace.append((10,word,0,0,0))
+                if word in (0xd5033a9f,0xd5033fdf,0xd5033b9f):trace.append((10,word,0,0,0))
+                elif word&~31==0xd5088340:
+                    reg=word&31;value=emu.reg_read(UC_ARM64_REG_X0+reg) if reg<31 else 0
+                    trace.append((14,word&~31,value,0,0));emu.reg_write(UC_ARM64_REG_PC,address+4)
                 if word&0xffe0001f==0xd4200000:state['bug']=1;emu.emu_stop()
         uc.hook_add(UC_HOOK_CODE,hook)
-        cases=withdrawals=partial_chains=repeated_zaps=0;coverage={'multi_success':0,'partial_failure':0,'cow_reject':0,'bug':0}
+        cases=withdrawals=partial_chains=repeated_zaps=moves=0;coverage={'multi_success':0,'partial_failure':0,'cow_reject':0,'bug':0}
         for case in range(216):
             address=(1<<21)+(4096 if case%9==0 else 0)
             size=(1,4096,1<<21,(1<<21)+4096,3<<21,0)[case%6]
@@ -288,11 +322,31 @@ def run(args):
             # successful deposits left behind by a partial allocation failure.
             if not out[7]:
                 seen=set();index=(address>>21)&511
-                if args.teardown=='zap':
+                if args.teardown in ('zap','move-zap'):
+                    moved_index=index
+                    if args.teardown=='move-zap':
+                        moved_index=128;uc.mem_write(mm+0x3c8,bytes(8));uc.mem_write(mm+0x420,bytes(8));uc.mem_write(cap,bytes(16))
+                        for step in range(mapped):
+                            old_addr=address+step*(1<<21);new_addr=(moved_index+step)*(1<<21)
+                            move_out=(ctypes.c_uint64*515)();move_rows=(ctypes.c_uint64*640)();move_meta=(ctypes.c_ubyte*576)()
+                            owner_before=bytes(uc.mem_read(pmd_metadata,64));tables_before=bytes(uc.mem_read(pages,512))
+                            nmove=host.host_move_step(index+step,moved_index+step,old_addr,new_addr,move_out,move_rows,move_meta);want=[tuple(move_rows[j*5:(j+1)*5]) for j in range(nmove)]
+                            trace.clear()
+                            for r,v in zip((UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3,UC_ARM64_REG_X4,UC_ARM64_REG_X5),(vma,old_addr,new_addr,direct+(index+step)*8,direct+(moved_index+step)*8,0)):uc.reg_write(r,v)
+                            uc.reg_write(UC_ARM64_REG_X30,stop);uc.reg_write(UC_ARM64_REG_SP,stack)
+                            uc.emu_start(kernel.address('move_dmabuf_huge_pmd'),stop,count=20000)
+                            assert not state['bug'] and uc.reg_read(UC_ARM64_REG_PC)==stop
+                            actual=[uc.reg_read(UC_ARM64_REG_X0),struct.unpack('<Q',uc.mem_read(mm+128,8))[0],state['bug']]
+                            assert actual==list(move_out[:3]) and actual[0]==1,('chain move return/account',case,step)
+                            assert bytes(uc.mem_read(direct,4096))==bytes(move_out)[24:],('chain move PMDs',case,step)
+                            assert bytes(uc.mem_read(pages,512))+bytes(uc.mem_read(pmd_metadata,64))==bytes(move_meta),('chain move metadata',case,step)
+                            assert trace==want,('chain move trace',case,step,trace,want)
+                            assert bytes(uc.mem_read(pmd_metadata,64))==owner_before and bytes(uc.mem_read(pages,512))==tables_before,('same-table move preserves deposit list',case,step)
+                            moves+=1
                     tlb=ram+0x7000;zap_count=kernel.address('dmabuf_hugetlb_pmd_zap');assert kernel.span('dmabuf_hugetlb_pmd_zap') is None
                     uc.mem_write(zap_count,bytes(8));host.host_zap_reset();gather=bytearray(128);struct.pack_into('<Q',gather,0,mm);struct.pack_into('<Q',gather,16,(1<<64)-1);uc.mem_write(tlb,bytes(gather))
                     for step in range(mapped+bool(mapped)):
-                        offset=min(step,mapped-1);at=index+offset;addr=(address&~((1<<21)-1))+offset*(1<<21)
+                        offset=min(step,mapped-1);at=moved_index+offset;addr=at*(1<<21)
                         zap_out=(ctypes.c_uint64*515)();zap_meta=(ctypes.c_ubyte*576)();zap_rows=(ctypes.c_uint64*640)();zap_tlb=(ctypes.c_ubyte*128)()
                         z=host.host_zap_step(at,addr,step==0,zap_out,zap_rows,zap_meta,zap_tlb);want=[tuple(zap_rows[j*5:(j+1)*5]) for j in range(z)]
                         trace.clear()
@@ -331,11 +385,12 @@ def run(args):
         print(f'Coverage categories: {coverage}')
         assert withdrawals and partial_chains
         print(f'PASS: remap→{args.teardown} sequence: {withdrawals} tables, including {partial_chains} partial-failure chains; owner drains to NULL')
-        if args.teardown=='zap':
+        if args.teardown in ('zap','move-zap'):
             assert repeated_zaps
             print(f'Deposited tables freed exactly once in allocator model; {repeated_zaps} repeated zap calls return zero without freeing/accounting again. PMDs clear and pgtables_bytes restores initial value; gather/counters/metadata/helper traces compared at each step.')
+        if args.teardown=='move-zap':assert moves==withdrawals;print(f'PASS: {moves} remap→same-PMD-page move→zap steps; deposit owner/list unchanged by move, source clears, destination mapping then tears down')
         print('Real stock deposit/pmd_set_huge/withdraw bodies executed; native exact ACK bodies, list/owner bytes and barriers compared. Allocation/free/locks modeled; not full remap/move/split lifecycle, MMU, SMP or hardware proof.')
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--symbols',type=Path,required=True);p.add_argument('--teardown',choices=('withdraw','zap'),default='withdraw');run(p.parse_args())
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--symbols',type=Path,required=True);p.add_argument('--teardown',choices=('withdraw','zap','move-zap'),default='withdraw');run(p.parse_args())
