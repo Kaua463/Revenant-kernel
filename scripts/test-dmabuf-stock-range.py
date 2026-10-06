@@ -54,8 +54,8 @@ def load(name):
 def run(args):
     from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
     from unicorn.arm64_const import (UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,
-                                    UC_ARM64_REG_X3,UC_ARM64_REG_X4,UC_ARM64_REG_X30,
-                                    UC_ARM64_REG_SP,UC_ARM64_REG_PC)
+                                    UC_ARM64_REG_X3,UC_ARM64_REG_X4,UC_ARM64_REG_X5,UC_ARM64_REG_X30,
+                                    UC_ARM64_REG_SP,UC_ARM64_REG_SP_EL0,UC_ARM64_REG_PC)
     image=args.image.read_bytes();contract=load('verify-stock-recovered-contracts.py')
     assert hashlib.sha256(image).hexdigest()==contract.IMAGE_SHA
     assert hashlib.sha256(args.symbols.read_bytes()).hexdigest()==contract.SYMBOL_SHA
@@ -108,6 +108,29 @@ def run(args):
             assert bytes(uc.mem_read(direct,len(p)))==p,'walker must not mutate table when helper modeled'
             bugs+=state['bug']
         print(f'PASS: {args.cases} stock ARM64 range cases; PGD/PMD routing, boundary stops and {bugs} VMA bit-39 BUG guards')
+        # Execute producer prefix rather than inferring VMA flag meaning from
+        # the walker. Stop before PGD/allocation loop; no remap-body proof.
+        remap=kernel.address('dmabuf_huge_remap_pfn_range')
+        prefix_end=0xffffffc0803bb99c
+        for mode in (0,1,2,0xffffffff):
+            for flags in (0,8,32,40,1<<39,(1<<39)|32):
+                start=0x400000;end=start+4096
+                uc.mem_write(vma,struct.pack('<5Q',start,end,mm,0,flags))
+                uc.mem_write(vma+44,struct.pack('<I',7));uc.mem_write(mm+224,struct.pack('<I',7))
+                uc.mem_write(vma+120,struct.pack('<Q',0xaabb))
+                uc.reg_write(UC_ARM64_REG_SP_EL0,ram+0x4000)
+                for reg,value in zip((UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3,UC_ARM64_REG_X4,UC_ARM64_REG_X5),
+                                     (vma,start,0x1234,4096,3,mode)):
+                    uc.reg_write(reg,value)
+                uc.reg_write(UC_ARM64_REG_SP,stack);uc.reg_write(UC_ARM64_REG_X30,stop)
+                uc.emu_start(remap,prefix_end,count=10000)
+                assert uc.reg_read(UC_ARM64_REG_PC)==prefix_end
+                expected_flags=flags|0x4044400|(0 if mode else 1<<39)
+                actual_flags=struct.unpack('<Q',uc.mem_read(vma+32,8))[0]
+                assert actual_flags==expected_flags,('remap flag producer',mode,flags,actual_flags)
+                pgoff=struct.unpack('<Q',uc.mem_read(vma+120,8))[0]
+                assert pgoff==(0x1234 if flags&40==32 else 0xaabb)
+        print('PASS: 24 ARM64 remap prefixes confirm bit39 set only for map_type=0; common flags and COW vm_pgoff')
         print('Split helper intercepted; does not prove page-table stability, MMU or flag producer contract.')
 
 

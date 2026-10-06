@@ -1,6 +1,6 @@
 /* Pinned stock: ARM64 4K/39-bit VA, three page-table levels. NOT installed.
- * VMA bit 39 is proven as a guard, but its original macro name/producer
- * remains unverified. Do not assign anonymous-THP semantics to this flag.
+ * VMA bit 39 is a guard, produced by remap for map_type=0; original macro
+ * name and full caller contract remain unverified. No anonymous-THP semantics.
  * Caller must supply a nonempty valid VMA range and stable page tables.
  */
 #define DMABUF_RECOVERED_VMA_BIT_39 (1UL << 39)
