@@ -17,7 +17,7 @@ GUARD = 'CONFIG_XIAOMI_DMABUF_HUGETLB'
 def candidate(core, recipe):
     if core.count(FOPS) != 1 or 'dma_buf_hugetlb_get_unmapped_area' in core:
         raise ValueError('core callback anchor drift/already integrated')
-    prefix = '#ifdef ' + GUARD + '\n' + recipe + '\n#endif\n\n'
+    prefix = '#ifdef ' + GUARD + '\n#include <linux/mman.h>\n' + recipe + '\n#endif\n\n'
     registration = '#ifdef ' + GUARD + '\n\t.get_unmapped_area = dma_buf_hugetlb_get_unmapped_area,\n#endif\n'
     return core.replace(FOPS, prefix + FOPS + registration)
 

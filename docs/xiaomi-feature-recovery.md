@@ -756,6 +756,24 @@ próprio novo teste, não ABI/spec alterados; proposta §B futura: false-CLOEXEC
 pass por unchecked syscall return, sob V35 evidence-not-inferred. SPEC não
 amendada sem aprovação; registro/correção local não pausa implementação.
 
+### Checkpoint — header integration failure identificado e corrigido
+
+Run37511000979 (07f49af) falhou no Kbuild:
+drivers/dma-buf/dma-buf.c:583:14 undeclared MAP_FIXED. VM/providers skipped;
+nunca tratar como runtime pass. Fixture diferencial define MAP_FIXED para
+provar corpo/routing, portanto não detecta include ausente no translation unit
+real. Classe(a) integração/adaptador errado, não falha da equivalência ARM64.
+
+Address overlay prefix agora inclui linux/mman.h dentro do feature guard,
+antes do corpo recuperado. Nova regressão falhou antes e passou após fix;
+disabled branch continua removendo include/callback, sem delta funcional.
+Recipe bytes/semântica4050cases não alterados; patch/manifest extension novos.
+Run37512915333 (54c6afd) cancelamento solicitado por herdar mesmo bug;
+guest-source37512914935 independente, não cancelado. Não reiniciar somente
+por polling timeout; verificar estado terminal antes de próxima execução.
+Proposta §B futura: semantic fixture ≠ integration-header compile proof,
+sob V35/V39; SPEC não alterada silenciosamente.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

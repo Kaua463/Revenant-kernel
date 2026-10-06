@@ -12,6 +12,11 @@ module = SourceFileLoader('dma_address_overlay', str(Path(__file__).with_name('p
 
 
 class Overlay(unittest.TestCase):
+    def test_map_fixed_header_is_explicit_and_guarded(self):
+        result = module.candidate(module.FOPS+'};\n','static void recipe(void) {}\n')
+        self.assertIn('#ifdef '+module.GUARD+'\n#include <linux/mman.h>\n',result)
+        self.assertEqual(result.count('#include <linux/mman.h>'),1)
+
     def test_recipe_pin_and_disabled_scope(self):
         recipe = (Path(__file__).parents[1]/'tools/stock-recovery/dmabuf_huge_address.recovered.c').read_text()
         self.assertEqual(hashlib.sha256(recipe.encode()).hexdigest(), module.RECIPE_SHA)
