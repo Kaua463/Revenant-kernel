@@ -22,6 +22,7 @@ on:
       - scripts/test-dmabuf-generic-split-routing.py
       - scripts/test-dmabuf-move-safety.py
       - scripts/test-dmabuf-guest-prefork.py
+      - scripts/test-dmabuf-guest-split-move.py
       - scripts/test-dmabuf-remap-safety.py
       - scripts/test-dmabuf-stock-remap-pmd.py
       - scripts/prepare-dmabuf-address-overlay.py
@@ -136,6 +137,8 @@ jobs:
             python3 scripts/test-dmabuf-generic-split-routing.py
           python3 scripts/test-dmabuf-move-safety.py
           python3 scripts/test-dmabuf-guest-prefork.py
+          DMA_ACK_REFERENCE="$GITHUB_WORKSPACE/runtime-reference" \
+            python3 scripts/test-dmabuf-guest-split-move.py
           python3 scripts/test-dmabuf-remap-safety.py --ack-helpers ws/common
           python3 scripts/validate-dmabuf-overlay.py --source ws/common \
             --overlay tools/stock-recovery/overlays/dma-6.6.77 --apply-review

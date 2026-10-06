@@ -86,6 +86,7 @@ def check_log(text):
         fork = 'DMA_GUEST_FORK_PASS: /dev/recovered-dma-audit-' + device + ' shared_write=1 data_verified=1'
         if text.count(prefork)!=1 or text.count(fork)!=1 or not text.index(crossing)<text.index(prefork)<text.index(fork)<text.index(boundary):
             raise ValueError('pre-fork move/protect evidence missing/out of order: '+device)
+        check_split_move(text, '/dev/recovered-dma-audit-'+device, fork, boundary)
         check_huge_events(text[allocation.start():text.index(prefork)], mode, device)
         if release.group(2) != str(mode):
             raise ValueError('release does not match allocated buffer: ' + device)
@@ -114,6 +115,8 @@ def check_log(text):
                     raise ValueError('cold-PUD reservation order/mode mismatch: '+device)
     if text.count('DMA_GUEST_PRE_FORK:')!=12 or text.count('DMA_GUEST_FORK_PASS:')!=10 or text.count('DMA_EXPORT_FORK_PASS')!=2:
         raise ValueError('missing/duplicate/malformed pre-fork coverage')
+    if text.count('DMA_GUEST_SPLIT_MOVE:')!=12:
+        raise ValueError('missing/duplicate/malformed fragmented VMA move coverage')
     owned_intervals.extend(check_export_log(text))
     # Successful helper logs have no pointers/IDs. Attribute them only when
     # exactly one owned PMD buffer is live, never across unrelated lifetimes.
@@ -155,6 +158,7 @@ def check_export_log(text):
         fork = f'DMA_EXPORT_FORK_PASS mode={mode} shared_write=1 data_verified=1'
         if text.count(prefork)!=1 or text.count(fork)!=1 or not allocation.start()<text.index(prefork)<text.index(fork)<text.index(boundary):
             raise ValueError('DMA-BUF pre-fork move/protect proof missing/out of order')
+        check_split_move(text, 'export-mode-'+str(mode), fork, boundary)
         check_huge_events(text[allocation.start():text.index(prefork)],mode,'export-mode-'+str(mode))
         for length,mask,huge,hint in ((4096,4095,0,0),(65536,65535,0,1),
                                       (2097152,2097151,1,1),(4194304,2097151,1,0)):
@@ -168,6 +172,12 @@ def check_export_log(text):
             if not text.index(alignment)<text.index(prefork):
                 raise ValueError('DMA-BUF pre-fork test precedes alias creation')
     return owned_intervals
+
+
+def check_split_move(text, label, fork, boundary):
+    marker = 'DMA_GUEST_SPLIT_MOVE: '+label+' segments=3 whole_move_errno=14 data_verified=1'
+    if text.count(marker)!=1 or not text.index(fork)<text.index(marker)<text.index(boundary):
+        raise ValueError('fragmented VMA move proof missing/out of order: '+label)
 
 
 def check_huge_events(interval, mode, label):

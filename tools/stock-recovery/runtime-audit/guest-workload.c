@@ -142,6 +142,40 @@ static void verify_prefork_lifecycle(void **first, const void *alias,
 	printf("DMA_GUEST_PRE_FORK: %s move=1 protect=1 read_concurrent=1 cpu_migrate=1 data_verified=1\n", label);
 }
 
+static void *move_split_mapping(void *first, const char *label)
+{
+	const size_t offsets[] = {0, BLOCK, BLOCK + 4096};
+	const size_t lengths[] = {BLOCK, 4096, BLOCK - 4096};
+	unsigned char residency[BYTES / 4096];
+	void *target = reservation(BYTES);
+
+	/* Partial mprotect split this VM_SPECIAL range into three VMAs.
+	 * vma_merge deliberately refuses VM_SPECIAL, even after restoring RW.
+	 * mremap must reject spanning these VMAs; do not change kernel semantics
+	 * to accommodate an invalid guest request. FIXED first unmaps its owned
+	 * destination, so re-reserve that exact hole before moving each VMA.
+	 */
+	errno = 0;
+	if (mremap(first, BYTES, BYTES, MREMAP_MAYMOVE | MREMAP_FIXED, target) != MAP_FAILED || errno != EFAULT)
+		fail("split VMA whole move guard");
+	verify(first, 0, BYTES);
+	errno = 0;
+	if (!mincore(target, BYTES, residency) || errno != ENOMEM)
+		fail("split move rejected destination unwind");
+	if (mmap(target, BYTES, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS |
+		 MAP_FIXED_NOREPLACE, -1, 0) != target)
+		fail("split move destination reservation");
+	for (size_t index = 0; index < 3; ++index) {
+		void *destination = (char *)target + offsets[index];
+		if (mremap((char *)first + offsets[index], lengths[index], lengths[index],
+			   MREMAP_MAYMOVE | MREMAP_FIXED, destination) != destination)
+			fail("split VMA segment move");
+	}
+	verify(target, 0, BYTES);
+	printf("DMA_GUEST_SPLIT_MOVE: %s segments=3 whole_move_errno=%d data_verified=1\n", label, EFAULT);
+	return target;
+}
+
 static void migrate_and_verify(const void *alias)
 {
 	cpu_set_t original, one;
@@ -191,7 +225,7 @@ static void verify_cross_pgd(int fd, const char *device)
 static void exercise(const char *device, int inject)
 {
 	int fd = open(device, O_RDWR | O_CLOEXEC), status;
-	void *first, *alias, *target, *moved;
+	void *first, *alias, *moved;
 	pid_t child;
 	pthread_t thread;
 	struct reader reader;
@@ -280,10 +314,7 @@ static void exercise(const char *device, int inject)
 	atomic_init(&reader.passes, 0);
 	if (pthread_create(&thread, NULL, read_alias, &reader))
 		fail("reader create");
-	target = reservation(BYTES);
-	moved = mremap(first, BYTES, BYTES, MREMAP_MAYMOVE | MREMAP_FIXED, target);
-	if (moved != target)
-		fail("move mapping");
+	moved = move_split_mapping(first, device);
 	verify(moved, 0, BYTES);
 	migrate_and_verify(alias);
 	if (mprotect((char *)moved + BLOCK, 4096, PROT_NONE) ||
@@ -316,7 +347,7 @@ static void exercise(const char *device, int inject)
 static void exercise_export(unsigned int mode)
 {
 	const size_t lengths[] = {4096, 65536, BLOCK, BYTES};
-	void *mappings[4], *target, *moved;
+	void *mappings[4], *moved;
 	int factory, fd, fd_flags, status;
 	pid_t child;
 	unsigned int attempt;
@@ -385,10 +416,7 @@ static void exercise_export(unsigned int mode)
 	((volatile uint64_t *)mappings[3])[0] ^= 9;
 	verify(mappings[3], 0, BYTES);
 	printf("DMA_EXPORT_FORK_PASS mode=%u shared_write=1 data_verified=1\n", mode);
-	target = reservation(BYTES);
-	moved = mremap(mappings[3], BYTES, BYTES, MREMAP_MAYMOVE | MREMAP_FIXED, target);
-	if (moved != target)
-		fail("export moved mapping");
+	moved = move_split_mapping(mappings[3], label);
 	migrate_and_verify(moved);
 	for (size_t index = 0; index < 3; ++index) {
 		verify(mappings[index], 0, lengths[index]);

@@ -1069,6 +1069,56 @@ exportada; CRC/KMI e evidência de compilação nova permanecem obrigatórios. W
 passa a exigir provider/pointer real em `dma_buf_fops`, além dos dez helpers e
 quatro counters; gate Ruby tem sexto negativo para callback ausente.
 
+### Checkpoint remoto — revisão `ba612f6232173b8e0630405b4061ca47e1ad0bf1`
+
+Resultados abaixo substituem apenas os pendentes correspondentes dos checkpoints
+anteriores; não encerram T20, ativação stock ou hardware.
+
+- Fontes root completas: run `37536101325`, sucesso. KSU/SUSFS reais, 31 caminhos
+  tracked; manifest composto
+  `73db391ccb9ab268e92854ff218df4ee311595596c6250d6a922cb8065b313b6`.
+- Guest Linux AArch64: run `37536101109`, sucesso. SHA256 da fonte
+  `ed0741492996b5899cfb0eb87eda9366ddaf9e1fd56b96ab4f9015ee5d4e00d6`
+  conferido contra checkout; compilação ≠ execução.
+- Kernel root + DMA: run `37536101164`, sucesso. 14 providers ELF e callback
+  `dma_buf_fops.get_unmapped_area` ligado no offset 152; release stock exato,
+  KSU `33239/v3.3.0`, configurações root/DMA e KFENCE conferidas.
+  610 entradas de módulos, 78 assinaturas stock cobertas, 3.506 CRCs kernel
+  compatíveis e certificado stock embutido. Artefatos baixados em
+  `outputs/dma-root-build-audit-37536101164`; todos os 3.506 CRCs recalculados
+  contra `Module.symvers` localmente. Manifest de composição idêntico ao run
+  de fontes; SHA256 de config baixada confere com relatório providers.
+  vmlinux reportado:
+  `bb55040e82a767b93ecec4d8703038f3bcc2a3c027003957b5a7b2e739f08953`;
+  config:
+  `d5b561e2b0221a715a751458afd5d5fc9f119b0e51b2d0d133a904b7686fdf6f`.
+- VM com novo workload: run `37536101158`, compilação passou, guest falhou
+  com `move mapping errno=14` após primeiro pré-fork/fork PMD. Serial preservado
+  em `outputs/dma-producer-37536101158`; não declarar matriz runtime aprovada.
+- Controle ACK n/y: run `37536101129`, rerun solicitado após cancelamento
+  anterior de fila; cancelamento ≠ falha de código.
+
+O produtor VM é separado do kernel com root. ABI compilada não prova runtime
+KSU/SUSFS, carregamento de todos os módulos, ativação pelo exportador GPU stock
+ou ausência de falhas no Poco. Nenhuma imagem/ZIP de instalação publicada.
+
+Falha guest rastreada: proteção parcial pré-fork criou três VMAs; ACK pinado
+`vma_merge` recusa `VM_SPECIAL`, e `vma_to_resize` retorna EFAULT se old_len
+ultrapassa vm_end. Antigo teste pós-fork pedia mover 4MiB de uma vez, violando
+esse contrato. Não alterar kernel para aceitar request inválido. Guest agora
+exige EFAULT no request inteiro, confirma dados fonte preservados e destino
+desfeito, re-reserva somente o hole possuído com NOREPLACE, move três segmentos
+2MiB/4KiB/(2MiB−4KiB), verifica todos os bytes. Misc e export usam mesmo helper.
+Runner exige 12 markers únicos/ordenados de rejeição + movimento segmentado;
+pre-fork dois huge moves/um split permanece obrigatório, não afrouxado.
+Teste nativo usa corpo ACK real `vma_to_resize` hash-pinado, topologia e
+syscalls modelados, helper guest real + ASan/UBSan; dois modos passam.
+19 testes runner passam. Typo inicial `inputs`/`sources` no acesso ao manifest
+de teste corrigido sem alterar hashes/gates. Bateria relacionada passa.
+Backprop proposto, sem alterar SPEC sem aprovação: §V exige respeitar fronteiras
+VMA após mprotect e testar rejeição/destino/transferência segmentada; §B registra
+suposição incorreta de merge VM_SPECIAL no guest. Nova execução VM pendente.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

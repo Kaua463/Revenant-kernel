@@ -34,6 +34,7 @@ def mock_pass():
                       *((['DMA_AUDIT_HUGE_MOVE','DMA_AUDIT_HUGE_MOVE','DMA_AUDIT_HUGE_SPLIT']) if mode==0 else []),
                       f'DMA_GUEST_PRE_FORK: /dev/recovered-dma-audit-{device} move=1 protect=1 read_concurrent=1 cpu_migrate=1 data_verified=1',
                       f'DMA_GUEST_FORK_PASS: /dev/recovered-dma-audit-{device} shared_write=1 data_verified=1',
+                      f'DMA_GUEST_SPLIT_MOVE: /dev/recovered-dma-audit-{device} segments=3 whole_move_errno=14 data_verified=1',
                       f'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-{device}',
                       f'DMA_AUDIT_RELEASE id={identity} mode={mode}',
                       f'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-{device} reader_passes=1'))
@@ -47,6 +48,7 @@ def mock_pass():
         lines.extend((*((['DMA_AUDIT_HUGE_MOVE','DMA_AUDIT_HUGE_MOVE','DMA_AUDIT_HUGE_SPLIT']) if mode==0 else []),
                       f'DMA_GUEST_PRE_FORK: export-mode-{mode} move=1 protect=1 read_concurrent=1 cpu_migrate=1 data_verified=1',
                       f'DMA_EXPORT_FORK_PASS mode={mode} shared_write=1 data_verified=1',
+                      f'DMA_GUEST_SPLIT_MOVE: export-mode-{mode} segments=3 whole_move_errno=14 data_verified=1',
                       f'DMA_EXPORT_LAST_UNMAP mode={mode}',
                       f'DMA_EXPORT_RELEASE id={identity} mode={mode}',
                       f'DMA_EXPORT_CASE_PASS mode={mode} live=0'))
@@ -57,6 +59,18 @@ PASS = mock_pass()
 
 
 class Runner(unittest.TestCase):
+    def test_fragmented_vma_move_coverage_is_required_and_ordered(self):
+        for label, fork in (('/dev/recovered-dma-audit-pmd',
+                             'DMA_GUEST_FORK_PASS: /dev/recovered-dma-audit-pmd shared_write=1 data_verified=1'),
+                            ('export-mode-0', 'DMA_EXPORT_FORK_PASS mode=0 shared_write=1 data_verified=1')):
+            marker=f'DMA_GUEST_SPLIT_MOVE: {label} segments=3 whole_move_errno=14 data_verified=1'
+            for replacement in ('',marker+'\n'+marker,marker.replace('segments=3','segments=2'),
+                                marker.replace('whole_move_errno=14','whole_move_errno=0')):
+                with self.subTest(label=label,replacement=replacement), self.assertRaises(ValueError):
+                    module.check_log(PASS.replace(marker,replacement))
+            with self.assertRaises(ValueError):
+                module.check_log(PASS.replace(marker,'').replace(fork,marker+'\n'+fork))
+
     def test_all_huge_events_require_unique_owned_pmd_lifetime(self):
         event = 'DMA_AUDIT_HUGE_SPLIT\n'
         for changed in (event+PASS, PASS+'\n'+event,

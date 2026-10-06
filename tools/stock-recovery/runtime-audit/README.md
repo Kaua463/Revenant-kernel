@@ -75,7 +75,8 @@ High-order allocation can legitimately fail; no fallback to arbitrary memory.
 Mappings may cover aligned 2 or 4 MiB subsets, shared and non-executable only.
 The mmap callback validates overflow/bounds, checks every actual destination
 PMD under mmap write lock, and rejects even preallocated PTE tables. It invokes
-the recovered mapper unchanged. It keeps vm_file and adds no VMA callbacks or
+the recovered mapper with the separately declared integration safety guards;
+the hash-pinned stock recipe itself remains unchanged. It keeps vm_file and adds no VMA callbacks or
 extra VMA references. No ioctl/read/write/physical-address interface exists.
 
 Kconfig/Makefile are **not sourced by any shipping kernel tree or workflow**. Their
