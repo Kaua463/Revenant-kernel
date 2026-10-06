@@ -59,6 +59,7 @@ KCONFIG='''
 config XIAOMI_DMABUF_HUGETLB
 	bool "Recovered rodin DMA-BUF huge mappings (experimental)"
 	depends on ARM64 && ARM64_4K_PAGES && ARM64_VA_BITS_39
+	depends on !CPU_BIG_ENDIAN
 	depends on TRANSPARENT_HUGEPAGE && HAVE_ARCH_HUGE_VMAP && SMP
 	default n
 	help

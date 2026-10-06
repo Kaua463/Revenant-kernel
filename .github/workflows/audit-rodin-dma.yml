@@ -9,6 +9,7 @@ on:
       - scripts/prepare-dmabuf-reimplementation.py
       - scripts/validate-dmabuf-overlay.py
       - scripts/check-dmabuf-build.py
+      - scripts/test-dmabuf-build-gates.py
       - tools/stock-recovery/overlays/dma-6.6.77/**
 
 permissions:
@@ -39,6 +40,12 @@ jobs:
             enabled: 'y'
     steps:
       - uses: actions/checkout@v4
+      - name: Validate audit gates
+        run: |
+          set -euo pipefail
+          python3 scripts/test-dmabuf-build-gates.py
+          python3 -m py_compile scripts/prepare-dmabuf-reimplementation.py \
+            scripts/validate-dmabuf-overlay.py scripts/check-dmabuf-build.py
       - name: Install build dependencies
         run: |
           set -euo pipefail

@@ -252,6 +252,10 @@ Workflow separado `audit-rodin-dma.yml` preparado: ACK/tag object exatos, dois p
 
 SUSFS pin be7b7ef49a1e1b189c3abf00eacaa7ebdb4168c1 conferido via objeto Git local (checkout atual distinto não tratado como referência). AS_FLAGS_SUS_MAP=39 é bit de address_space.flags, **não** vm_flags: não é colisão com DMA. Patch SUSFS em memory.c afeta include e __access_remote_vm, não os hooks DMA recuperados; composição e gate do manifest global ainda precisam de teste na integração KSUN/SUSFS.
 
+Atualização: geração atual `outputs/stock-dmabuf-overlay-20261005-v4` acrescenta restrição little-endian explícita no Kconfig; auditor ELF rejeita big-endian. Patch/manifest versionados regenerados canonicamente e revalidados. `test-dmabuf-susfs-composition.py` passou: patch SUSFS SHA fb8ed4e... e susfs_def.h SHA 4eef49b... exatos; única interseção MM relevante é memory.c; aplicar DMA→SUSFS ou SUSFS→DMA em árvores descartáveis resulta nos mesmos bytes de todos os inputs/header. Gate normal corretamente rejeita source pós-SUSFS: composição não habilita aceitar preimage divergente silenciosamente. Ainda falta composição do manifest global e build completo com KSUN/SUSFS.
+
+Regressão após overlay: wrappers/range/zap/split/move/fork/unmap/move-caller/VMA/split-VMA, seis modos remap anteriores, dois modos split-unmap com retirada+RCU, PTE-remap 360 e RCU 16 sequências passaram; split isolado default 200. Recipes originais preservadas. Três suites novas totalizam 15 testes (gerador, validator, config/provider gates); composição SUSFS passou separadamente. Auditoria Actions será disparada somente depois desses gates locais, sem installer/release/flash.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

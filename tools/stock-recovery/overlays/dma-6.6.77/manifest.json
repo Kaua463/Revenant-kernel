@@ -2,7 +2,7 @@
   "status": "REVIEW_ONLY_NOT_INSTALLABLE",
   "ack_commit": "f7ebe251035c0d15ff90c6a0a320697932785fad",
   "image_sha256": "99485b0132e3aa28f4e965119591c8149fe3c20e7e0fd10d753ef014a582472e",
-  "patch_sha256": "57b75f3e59aa831d9cf744958002eef90e46795088140a1edd648f4ee63024ae",
+  "patch_sha256": "7a717d4a08ab1a4ccd60c41e132d62c716330e0082a0b314669ba5a5ed0d43d7",
   "sources": {
     "mm/mmap.c": "1e554a480b57fed37600bc36ff3cab66c164af29934ff88362e1ed4bb6e73e5e",
     "mm/mremap.c": "0613e0605fd73f89fe2b8040e64f8293a8619b64d84a33cbb321f8dfc113ab7b",
@@ -35,7 +35,7 @@
     },
     "mm/Kconfig": {
       "before": "2a53d16cfe662c2f2ce425faa3cd9c1fb09e5071e570f7ebd0ab9b314c7e5e4a",
-      "after": "feebe3daf120b05b4a371ba722a86d7aa48ee00ed9f10858dc67043798d03916"
+      "after": "c45ac26775515e57fb93c9fe1a6f174824fa1e2313b22f7c63eb3dba8ef22ff8"
     },
     "mm/huge_memory.c": {
       "before": "21500d58bf839040cd8caaa053f1004983f3d8cdbb64503ddbd54bd6b0cedf3a",

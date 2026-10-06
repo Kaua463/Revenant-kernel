@@ -57,7 +57,7 @@ def run(args):
     table={}
     with vmlinux.open('rb') as stream:
         elf=ELFFile(stream)
-        if elf['e_machine']!='EM_AARCH64' or elf.elfclass!=64:raise ValueError('expected ARM64 ELF')
+        if elf['e_machine']!='EM_AARCH64' or elf.elfclass!=64 or not elf.little_endian:raise ValueError('expected little-endian ARM64 ELF')
         symbols=elf.get_section_by_name('.symtab')
         if symbols is None:raise ValueError('ELF symbol table missing')
         for symbol in symbols.iter_symbols():
