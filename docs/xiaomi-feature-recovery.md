@@ -922,6 +922,56 @@ reserva de tamanho errado. Init failure matrix cobre todos10register sites.
 T20/V35/V39: código e locais avançaram; stockproducer activation e revisão
 transitiva restante continuam obrigatórios antes de chamar local completo.
 
+### Checkpoint — proteção NULL somente na integração (V35,V39)
+
+Receita stock `dmabuf_huge_wrappers.recovered.c` permanece byte-idêntica/pinada.
+Gerador adiciona `if (!next) return` antes de ler `next->vm_start`; alteração
+explícita em `safety_deviations`, validador rejeita omissão desse metadado.
+Não tratar código adaptado como stock exato no caminho NULL.
+
+Teste nativo ASan/UBSan reproduz NULL dereference do stock em processo isolado;
+adaptação passa lookup NULL, VMA NULL/adj0 e comparação de traces definidos.
+3.000 routes ARM64 da receita original passam; cinco testes do gerador e seis
+do validador passam. Bateria local de fault/preflight/folded/runtime-source/
+exporter/parser/init/guest-data/root passa. Não prova VM/MMU/SMP/hardware.
+
+Backprop proposto, ainda não aplicado à SPEC: B46 — lookup NULL dereferenciado;
+V41 — integração guarda lookup antes de dereferenciar; desvio explícito,
+receita stock imutável e teste sanitizer. Requer aprovação da alteração da SPEC.
+
+Inspeção pontual stock: `dma_buf_mmap` e `dma_buf_mmap_internal` chamam
+`dma_buf_ops.mmap` indiretamente (offset0x60); `remap_pfn_range` chama
+`remap_pfn_range_notrack`, sem redirecionar para mapper Xiaomi. Mapper especial
+não exportado. Isso refuta redirecionamento automático nessas funções, não
+prova feature inativa nem fecha todos os exportadores/dynamic lookups.
+
+### Checkpoint — composição MM/core e rota real Mali/heap
+
+`prepare-dmabuf-combined-overlay.py`: gera base e callback em diretório
+temporário; valida identidades/escopos disjuntos/hash antes de criar resultado.
+Patch único sete arquivos, status REVIEW_ONLY_NOT_INSTALLABLE; preserva pending
+e safety_deviations. Resultado local: outputs/stock-dmabuf-combined-20261006-v1.
+Três testes usam fontes ACK reais: round-trip, disabled idêntico, exports
+inalterados, callback único, guard NULL; drift core e output existente abortam
+sem substituir arquivo. Não muda workflow/config nem ativa produtor stock.
+
+`extract-dmabuf-exporter-routing.py`: seleciona três identidades exatas dentro
+do inventário pinado610/78; rejeita ELF não ARM64 ET_REL, valida opcode de
+CALL26/JUMP26, resolve registro ABS64 em objetos, não altera módulos.
+Teste ELF cross-assembled valida bounds, tail-call, offsets e registro.
+Resultado: outputs/stock-dma-exporter-routing-20261006.json.
+
+Mali `kbase_fops.mmap` offset88 → kbase_mmap → kbase_context_mmap;
+reloc CALL26 caller+1568 → dma_buf_mmap. Em system_heap, objetos
+mtk_mm_heap_buf_ops/system_heap_buf_ops/mtk_slc_heap_buf_ops registram mmap
+offset96 → mtk_mm_heap_mmap/system_heap_mmap. CALL26 respectivos+236/+188
+→ remap_pfn_range, não mapper especial. mtk_sec_heap não possui função mmap
+nomeada nesta tabela; ausência de nome não prova ausência de qualquer rota.
+
+Rotas ELF específicas ≠ todas branches alcançáveis/runtime. GPU MMU e CPU VMA
+distintos. Não inserir roteamento artificial nesses callbacks e chamá-lo stock.
+Investigar exportadores/lookup indireto restantes; full activation segue aberto.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

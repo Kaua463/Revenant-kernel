@@ -16,6 +16,8 @@ def run(args):
     patch=args.overlay/'dmabuf-review.patch'
     if (report['status']!='REVIEW_ONLY_NOT_INSTALLABLE' or report['ack_commit']!=prepare.COMMIT or
         report['sources']!=prepare.SOURCES or report['recipes']!=prepare.RECIPES):raise ValueError('overlay contract/pin mismatch')
+    if report.get('safety_deviations')!=prepare.SAFETY_DEVIATIONS:
+        raise ValueError('overlay safety deviations mismatch')
     if hashlib.sha256(patch.read_bytes()).hexdigest()!=report['patch_sha256']:raise ValueError('patch hash mismatch')
     expected={'mm/Kconfig','mm/huge_memory.c','mm/memory.c','mm/mmap.c','mm/mremap.c','include/linux/xiaomi_dmabuf_huge.h'}
     if set(report['changes'])!=expected:raise ValueError('overlay write scope mismatch')

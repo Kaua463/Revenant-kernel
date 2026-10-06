@@ -116,7 +116,7 @@
  #include <linux/sched.h>
  #include <linux/sched/mm.h>
  #include <linux/sched/coredump.h>
-@@ -3994,3 +3995,334 @@
+@@ -3994,3 +3995,337 @@
  	trace_remove_migration_pmd(address, pmd_val(pmde));
  }
  #endif
@@ -267,6 +267,9 @@
 +		/* Stock dereferences next before its later NULL test. Caller lifetime
 +		 * and find_vma success must be established before integration.
 +		 */
++		/* Integration safety deviation: absent next VMA has no boundary to split. */
++		if (!next)
++			return;
 +		next_start = next->vm_start + adj_next;
 +		dmabuf_recovered_split_boundary(next, next_start);
 +	}

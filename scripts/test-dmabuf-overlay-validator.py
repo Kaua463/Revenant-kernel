@@ -49,6 +49,11 @@ class Validator(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'already exists'):m.run(self.args)
         self.assertEqual(path.read_text(),'user-owned header\n')
 
+    def test_hidden_safety_deviation_rejected(self):
+        self.report(lambda r:r.update(safety_deviations=[]))
+        with self.assertRaisesRegex(ValueError,'safety deviations'):m.run(self.args)
+        self.assertFalse((self.source/'include/linux/xiaomi_dmabuf_huge.h').exists())
+
 
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)

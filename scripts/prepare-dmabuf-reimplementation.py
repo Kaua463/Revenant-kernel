@@ -78,6 +78,17 @@ def replace_exact(text,old,new,count=1):
     return text.replace(old,new)
 
 
+SAFETY_DEVIATIONS = ['vma_adjust_dmabuf_huge: NULL find_vma result skips next-boundary split; stock recipe unchanged']
+
+
+def integration_wrappers(recipe):
+    """Keep exact recovered input separate from the declared safety adaptation."""
+    return replace_exact(recipe, '\t\tnext_start = next->vm_start + adj_next;',
+                         '\t\t/* Integration safety deviation: absent next VMA has no boundary to split. */\n'
+                         '\t\tif (!next)\n\t\t\treturn;\n'
+                         '\t\tnext_start = next->vm_start + adj_next;')
+
+
 def candidate(source,recipes):
     result=dict(source)
     for name in ('mm/memory.c','mm/mmap.c','mm/mremap.c','mm/huge_memory.c'):
@@ -116,7 +127,7 @@ def candidate(source,recipes):
     core='\n#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB\n#if CONFIG_PGTABLE_LEVELS != 3 || !USE_SPLIT_PMD_PTLOCKS\n#error "Recovered DMA requires 3 page-table levels and split PMD locks"\n#endif\n'
     for name in ('pmd_map','contpte_map','pmd_zap','pmd_split'):
         core+='atomic64_t dmabuf_hugetlb_'+name+' = ATOMIC64_INIT(0);\n'
-    core+='\n'+''.join(recipes[name]+'\n' for name in ('zap','split','wrappers','range','move','remap'))+'#endif\n'
+    core+='\n'+''.join((integration_wrappers(recipes[name]) if name=='wrappers' else recipes[name])+'\n' for name in ('zap','split','wrappers','range','move','remap'))+'#endif\n'
     result['mm/huge_memory.c']+=core
     header=HEADER
     for name in ('hooks','unmap_hook','move_hook','vma_hook'):
@@ -157,8 +168,8 @@ def run(args):
             'patch_sha256':digest(''.join(patch).encode()),
             'sources':SOURCES,'recipes':RECIPES,'changes':changes,
             'pending':['Kbuild enabled/disabled','KMI/module audit','producer alignment/ownership/unwind','VMA callbacks/refcounts','MMU/SMP/lifetime/hardware'],
-            'safety_deviations':[],
-            'preserved_hazards':['PMD remap ignores pmd_set_huge result; no 2MiB extent/alignment guard','ENOMEM leaves partial mappings','adj_next>0 dereferences next before null check']}
+            'safety_deviations':SAFETY_DEVIATIONS,
+            'preserved_hazards':['PMD remap ignores pmd_set_huge result; no 2MiB extent/alignment guard','ENOMEM leaves partial mappings']}
     (args.output/'manifest.json').write_text(json.dumps(report,indent=2)+'\n')
     print(f'Prepared {len(changes)} review-only files; no checkout/config/workflow/device changed')
 
