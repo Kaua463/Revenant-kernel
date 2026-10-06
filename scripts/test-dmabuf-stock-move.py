@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stock move vs recovered C; first CPU variant: range-TLBI disabled."""
+"""Stock move vs recovered C; TLBI operands traced across capability variants."""
 import argparse
 import ctypes
 import hashlib
@@ -52,15 +52,35 @@ static void set_pmd_at(struct mm_struct *m,unsigned long a,pmd_t *p,pmd_t v){(vo
  if((v.val&0x10000000000005dULL)==0x45 && (caps&(1ULL<<53)))trace(8,v.val,512,0);
  p->val=v.val;if((v.val&0x40000000000041ULL)==0x40000000000001ULL){barrier(0xd5033a9f);barrier(0xd5033fdf);}}
 static void flush_tlb_range(struct vm_area_struct *v,unsigned long start,unsigned long end){
- (void)start;(void)end;assert(v->vm_mm==&mm);barrier(0xd5033a9f);
- uint64_t asid=mm.asid<<48;trace(10,0xd5088340,asid,0);
- if(caps&1)trace(10,0xd5088340,asid|(1ULL<<48),0);
- barrier(0xd5033b9f);if(mm.notifier)trace(11,0x1001000,0,~0ULL);barrier(0xd5033b9f);}
+ assert(v->vm_mm==&mm);start&=~4095UL;end=(end+4095UL)&~4095UL;
+ uint64_t pages=(end-start)>>12,asid=mm.asid<<48;bool range=!!(caps&(1ULL<<46));
+ if((!range && end-start>=512*4096UL)||pages>=2097152){
+  barrier(0xd5033a9f);trace(10,0xd5088340,asid,0);
+  if(caps&1)trace(10,0xd5088340,asid|(1ULL<<48),0);
+  barrier(0xd5033b9f);if(mm.notifier)trace(11,0x1001000,0,~0ULL);
+ }else{
+  barrier(0xd5033a9f);int scale=3;
+  while(pages){
+   if(!range||pages==1){uint64_t arg=((start>>12)&0xfffffffffffULL)|asid;
+    trace(10,0xd5088320,arg,0);if(caps&1)trace(10,0xd5088320,arg|(1ULL<<48),0);
+    start+=4096;pages--;continue;}
+   assert(scale>=0);unsigned shift=5*(unsigned)scale+1;
+   uint64_t limit=32ULL<<shift,chunk=pages<limit?pages:limit;
+   int num=(int)(chunk>>shift)-1;
+   if(num>=0){uint64_t arg=((start>>12)&0x1fffffffffULL)|((uint64_t)num<<39)|((uint64_t)scale<<44)|(1ULL<<46)|asid;
+    trace(10,0xd5088220,arg,0);if(caps&1)trace(10,0xd5088220,arg|(1ULL<<48),0);
+    chunk=(uint64_t)(num+1)<<shift;start+=chunk*4096;pages-=chunk;}
+   scale--;
+  }
+  /* ACK macro mutates start before secondary-TLB notifier, as stock does. */
+  if(mm.notifier)trace(11,0x1001000,start,end);
+ }
+ barrier(0xd5033b9f);}
 '''
 WRAPPER=r'''
 unsigned host_move(const uint64_t *in,uint64_t *out,uint64_t *trace_out){
  nr=bug=0;memset(entries,0,sizeof(entries));entries[1].val=in[0];unsigned new_index=in[1]?513:2;entries[new_index].val=in[2];
- mm.asid=in[3];mm.notifier=in[4];caps=(in[5]<<53)|in[6];file.f_mapping=(void *)1;
+ mm.asid=in[3];mm.notifier=in[4];caps=(in[5]<<53)|in[6]|(in[11]<<46);file.f_mapping=(void *)1;
  struct vm_area_struct v={&mm,in[7]?&file:NULL,in[8]?(void *)1:NULL};bool ret=false;
  if(!setjmp(trap))ret=move_dmabuf_huge_pmd(&v,in[9],0x20000000,entries+1,entries+new_index,in[10]);
  out[0]=ret;out[1]=entries[1].val;out[2]=entries[new_index].val;out[3]=bug;memcpy(trace_out,rows,nr*4*sizeof(uint64_t));return nr;
@@ -113,16 +133,17 @@ def run(args):
                     reg=word&31;value=emu.reg_read(UC_ARM64_REG_X0+reg) if reg<31 else 0
                     trace.append((10,word&~31,value,0));emu.reg_write(UC_ARM64_REG_PC,address+4)
         uc.hook_add(UC_HOOK_CODE,hook)
-        coverage={'moved':0,'rejected_old':0,'destination_bug':0,'rmap':0,'deposit_transfer':0,'icache':0,'mte':0,'paired_tlbi':0}
-        for case in range(384):
+        coverage={'moved':0,'rejected_old':0,'destination_bug':0,'rmap':0,'deposit_transfer':0,'icache':0,'mte':0,'paired_tlbi':0,'range_tlbi':0,'single_tlbi':0,'range_notifier_end_end':0}
+        for case in range(768):
             present=(1,3,0,1<<58,1<<59,0x45)[case%6]
             old=0x4000000|present|(((case>>1)&1)<<54)|(((case>>2)&1)<<56)
             if case%6==2:old=0
-            values=(old,(case>>1)&1,int(case%23==0),case&0xffff,(case>>2)&1,(case>>3)&1,(case>>4)&1,(case>>5)&1,(case>>6)&1,0x400000+(4096 if case%2 else 0),(case>>7)&1)
-            inputs=(ctypes.c_uint64*11)(*values);out=(ctypes.c_uint64*4)();rows=(ctypes.c_uint64*256)()
+            old_address=(0,0x400000,0x401000,(1<<64)-1,(1<<64)-(1<<21),((1<<64)-(1<<21))+1)[(case//6)%6]
+            values=(old,(case>>1)&1,int(case%23==0),case&0xffff,(case>>2)&1,(case>>3)&1,(case>>4)&1,(case>>5)&1,(case>>6)&1,old_address,(case>>7)&1,(case>>8)&1)
+            inputs=(ctypes.c_uint64*12)(*values);out=(ctypes.c_uint64*4)();rows=(ctypes.c_uint64*256)()
             n=host.host_move(inputs,out,rows);expected=[tuple(rows[i*4:(i+1)*4]) for i in range(n)]
             oldp=direct+8;newp=direct+(4104 if values[1] else 16)
-            for a,v in ((vma+16,mm),(vma+104,anon if values[8] else 0),(vma+128,file if values[7] else 0),(file+232,mapping),(anon,anon),(mm+0x3c8,values[3]),(mm+0x420,values[4]),(oldp,old),(newp,values[2]),(cap,values[5]<<53),(cap+8,values[6])):uc.mem_write(a,struct.pack('<Q',v))
+            for a,v in ((vma+16,mm),(vma+104,anon if values[8] else 0),(vma+128,file if values[7] else 0),(file+232,mapping),(anon,anon),(mm+0x3c8,values[3]),(mm+0x420,values[4]),(oldp,old),(newp,values[2]),(cap,(values[5]<<53)|(values[11]<<46)),(cap+8,values[6])):uc.mem_write(a,struct.pack('<Q',v))
             trace.clear();state['bug']=0
             for r,v in zip((UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3,UC_ARM64_REG_X4,UC_ARM64_REG_X5),(vma,values[9],0x20000000,oldp,newp,values[10])):uc.reg_write(r,v)
             uc.reg_write(UC_ARM64_REG_X30,stop);uc.reg_write(UC_ARM64_REG_SP,stack)
@@ -136,10 +157,13 @@ def run(args):
             for category,op in (('rmap',1),('deposit_transfer',6),('icache',7),('mte',8)):
                 coverage[category]+=any(row[0]==op for row in trace)
             coverage['paired_tlbi']+=sum(row[0]==10 for row in trace)>1
+            coverage['range_tlbi']+=any(row[0]==10 and row[1]==0xd5088220 for row in trace)
+            coverage['single_tlbi']+=any(row[0]==10 and row[1]==0xd5088320 for row in trace)
+            coverage['range_notifier_end_end']+=any(row[0]==11 and row[2]==row[3] for row in trace)
         assert all(coverage.values()),coverage
-        print('PASS: 384 stock ARM64 move cases, range-TLBI disabled; PMD writes, same/different table locks, rmap locks, deposit transfer, cache/MTE helper and TLBI operands/barriers')
+        print('PASS: 768 stock ARM64 move cases; range/single/ASID TLBI, paired ASIDs, wrap boundaries, PMD writes, rmap locks, cache/MTE helpers and notifier arguments')
         print(f'Coverage categories: {coverage}')
-        print('TLBI skipped after trace; helpers modeled. Range-TLBI, boot alternatives, SMP, MMU and lifetime not proven.')
+        print('TLBI skipped after trace; helpers modeled. Boot alternatives, SMP, MMU and lifetime not proven.')
 
 
 if __name__=='__main__':
