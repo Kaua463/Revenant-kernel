@@ -651,6 +651,26 @@ Ainda obrigatório: todos failures/accounting/complete MMU/lifetimes, registro/
 callback/ativação real Xiaomi, runtime composto e hardware. Installer bloqueado,
 nenhum flash; T20 continua ~. Evidência real não substituída por mocks.
 
+### Checkpoint — contabilidade de tabelas pós-ENOMEM instrumentada; runtime pendente
+
+ACK pin include/linux/mm.h usa mm_pgtables_bytes() e mm_inc/dec_nr_ptes/
+nr_pmds sobre atomic_long pgtables_bytes. Não existem mm_nr_ptes/mm_nr_pmds
+getters nessa revisão. Novo produtor lê total antes do remap fault, após
+primeiro bloco publicado e na entrada do retry na mesma task/mm. Exige
+partial-before=4096 ou8192 (PTE, possível PMD) e retry=before. Context tokens
+comparados, não dereferenciados; mutex de auditoria serializa remaps. No guest
+esse intervalo antecede fork/reader, sem mutação concorrente de outras VMAs.
+Não prova leak-free universal a partir do total: preflight/table checks e
+sequência controlada continuam necessários; todas outras falhas permanecem abertas.
+
+Runner exige dois DMA_AUDIT_UNWIND IDs/modes e ordem fault_return→unwind
+→guest_retry; leak/underflow/delta impossível/wrongid/context/order/dup falham.
+MMU=y agora gate explícito. Três log-format tests compilam oito expressões
+reais; nove source-policy/nove runner/sete integration e selector/generated-site
+testes passaram localmente. Pin produtor atualizado, overlay shipping intacto.
+Run37494587692 continua prova dos gates antigos, **não** deste novo accounting.
+Nova execução real necessária; T20 permanece ~, nenhum flash/dispositivo.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

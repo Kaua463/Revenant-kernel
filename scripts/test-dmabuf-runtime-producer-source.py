@@ -39,6 +39,14 @@ def validate(source, config, makefile):
         'misc_deregister(&audit_fault_pmd_device)',
         'goto undo_pte;',
         'misc_deregister(&audit_pte_device)',
+        'audit_fault_buffer->table_bytes_partial = mm_pgtables_bytes(mm);',
+        'buffer->table_bytes_before = mm_pgtables_bytes(vma->vm_mm);',
+        'buffer->unwind_mm_token != (unsigned long)vma->vm_mm',
+        'buffer->unwind_task_token != (unsigned long)current',
+        'table_bytes_retry != buffer->table_bytes_before',
+        'buffer->table_bytes_partial < buffer->table_bytes_before',
+        'DMA_AUDIT_UNWIND id=%llu mode=%u before=%lu partial=%lu retry=%lu',
+        'audit_fault_buffer = NULL;',
     )
     for token in required:
         if token not in source:
@@ -115,6 +123,17 @@ class SourcePolicy(unittest.TestCase):
                       'audit_fault_plan = (struct dma_audit_fault_plan){0};',
                       'buffer->fault_pending = false;', 'goto undo_fault_pmd;',
                       'misc_deregister(&audit_fault_pmd_device)', 'goto undo_pte;'):
+            with self.subTest(token=token), self.assertRaises(ValueError):
+                validate(self.source.replace(token, 'REMOVED'), self.config, self.makefile)
+
+    def test_unwind_accounting_baseline_owner_and_context_required(self):
+        for token in ('audit_fault_buffer->table_bytes_partial = mm_pgtables_bytes(mm);',
+                      'buffer->table_bytes_before = mm_pgtables_bytes(vma->vm_mm);',
+                      'buffer->unwind_mm_token != (unsigned long)vma->vm_mm',
+                      'buffer->unwind_task_token != (unsigned long)current',
+                      'table_bytes_retry != buffer->table_bytes_before',
+                      'buffer->table_bytes_partial < buffer->table_bytes_before',
+                      'audit_fault_buffer = NULL;'):
             with self.subTest(token=token), self.assertRaises(ValueError):
                 validate(self.source.replace(token, 'REMOVED'), self.config, self.makefile)
 

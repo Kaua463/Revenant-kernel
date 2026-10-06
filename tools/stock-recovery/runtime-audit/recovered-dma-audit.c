@@ -35,6 +35,11 @@ struct audit_buffer {
 	unsigned int map_type;
 	unsigned long long id;
 	bool fault_pending;
+	bool unwind_pending;
+	unsigned long unwind_mm_token;
+	unsigned long unwind_task_token;
+	unsigned long table_bytes_before;
+	unsigned long table_bytes_partial;
 };
 
 static atomic64_t audit_next_id = ATOMIC64_INIT(0);
@@ -45,6 +50,7 @@ static unsigned int audit_fault_mode;
 static s64 audit_fault_maps_before;
 static struct vm_area_struct *audit_fault_vma;
 static unsigned long audit_fault_first_pfn;
+static struct audit_buffer *audit_fault_buffer;
 extern atomic64_t dmabuf_hugetlb_pmd_map;
 extern atomic64_t dmabuf_hugetlb_contpte_map;
 
@@ -98,6 +104,7 @@ bool recovered_dma_audit_fail_alloc(struct mm_struct *mm, unsigned int map_type)
 	published = atomic64_read(map_type ? &dmabuf_hugetlb_contpte_map :
 				 &dmabuf_hugetlb_pmd_map) - audit_fault_maps_before;
 	table_present = audit_first_block_present(map_type);
+	audit_fault_buffer->table_bytes_partial = mm_pgtables_bytes(mm);
 	if (published != 1 || !table_present)
 		pr_err("DMA_AUDIT_FAULT_FAIL: partial-map count=%lld table=%u\n", published, table_present);
 	pr_info("DMA_AUDIT_FAULT id=%llu mode=%u ordinal=2 published=%lld table=%u\n",
@@ -195,6 +202,7 @@ static int audit_mmap(struct file *file, struct vm_area_struct *vma)
 	phys_addr_t physical = page_to_phys(buffer->pages);
 	enum dma_audit_map_reason reason;
 	bool inject;
+	unsigned long table_bytes_retry;
 	int result;
 
 	mmap_assert_write_locked(vma->vm_mm);
@@ -218,16 +226,47 @@ static int audit_mmap(struct file *file, struct vm_area_struct *vma)
 	 */
 	/* Serialize audit remaps only. No global allocator failure or ioctl. */
 	mutex_lock(&audit_fault_mutex);
+	if (buffer->unwind_pending) {
+		/* No saved pointer is dereferenced: the bounded guest retries in
+		 * the same live task/mm, before creating any worker threads.
+		 */
+		if (buffer->unwind_mm_token != (unsigned long)vma->vm_mm ||
+		    buffer->unwind_task_token != (unsigned long)current) {
+			pr_err("DMA_AUDIT_ACCOUNTING_FAIL: retry context changed\n");
+			mutex_unlock(&audit_fault_mutex);
+			return -EINVAL;
+		}
+		table_bytes_retry = mm_pgtables_bytes(vma->vm_mm);
+		if (table_bytes_retry != buffer->table_bytes_before ||
+		    buffer->table_bytes_partial < buffer->table_bytes_before ||
+		    (buffer->table_bytes_partial - buffer->table_bytes_before != PAGE_SIZE &&
+		     buffer->table_bytes_partial - buffer->table_bytes_before != 2 * PAGE_SIZE)) {
+			pr_err("DMA_AUDIT_ACCOUNTING_FAIL: table bytes before=%lu partial=%lu retry=%lu\n",
+				buffer->table_bytes_before, buffer->table_bytes_partial, table_bytes_retry);
+			mutex_unlock(&audit_fault_mutex);
+			return -EINVAL;
+		}
+		pr_info("DMA_AUDIT_UNWIND id=%llu mode=%u before=%lu partial=%lu retry=%lu\n",
+			buffer->id, buffer->map_type, buffer->table_bytes_before,
+			buffer->table_bytes_partial, table_bytes_retry);
+		buffer->unwind_pending = false;
+	}
 	inject = buffer->fault_pending;
 	buffer->fault_pending = false;
 	audit_fault_mode = buffer->map_type;
 	audit_fault_id = buffer->id;
 	if (inject) {
+		audit_fault_buffer = buffer;
+		buffer->table_bytes_before = mm_pgtables_bytes(vma->vm_mm);
+		buffer->table_bytes_partial = 0;
+		buffer->unwind_mm_token = (unsigned long)vma->vm_mm;
+		buffer->unwind_task_token = (unsigned long)current;
 		audit_fault_vma = vma;
 		audit_fault_first_pfn = page_to_pfn(buffer->pages) + (offset >> PAGE_SHIFT);
 		if (!dma_audit_fault_arm(&audit_fault_plan, (unsigned long)current,
 					(unsigned long)vma->vm_mm, 2)) {
 			audit_fault_vma = NULL;
+			audit_fault_buffer = NULL;
 			mutex_unlock(&audit_fault_mutex);
 			return -EINVAL;
 		}
@@ -241,8 +280,11 @@ static int audit_mmap(struct file *file, struct vm_area_struct *vma)
 	if (inject)
 		pr_info("DMA_AUDIT_FAULT_RETURN id=%llu mode=%u result=%d fired=%u\n",
 			buffer->id, buffer->map_type, result, audit_fault_plan.fired);
+	if (inject && result == -ENOMEM && audit_fault_plan.fired == 1)
+		buffer->unwind_pending = true;
 	audit_fault_plan = (struct dma_audit_fault_plan){0};
 	audit_fault_vma = NULL;
+	audit_fault_buffer = NULL;
 	mutex_unlock(&audit_fault_mutex);
 	return result;
 }

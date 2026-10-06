@@ -18,6 +18,7 @@ def mock_pass():
         if inject:
             lines.extend((f'DMA_AUDIT_FAULT id={identity} mode={mode} ordinal=2 published=1 table=1',
                           f'DMA_AUDIT_FAULT_RETURN id={identity} mode={mode} result=-12 fired=1',
+                          f'DMA_AUDIT_UNWIND id={identity} mode={mode} before=12288 partial=16384 retry=12288',
                           f'DMA_GUEST_ENOMEM_PASS: /dev/recovered-dma-audit-{device} same_address_retry=1'))
         lines.extend((f'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-{device}',
                       f'DMA_AUDIT_RELEASE id={identity} mode={mode}',
@@ -70,7 +71,8 @@ class Runner(unittest.TestCase):
             with self.subTest(marker=marker), self.assertRaises(ValueError):
                 module.check_log(PASS.replace(marker, 'missing', 1))
         for error in ('DMA_GUEST_FAIL: x', 'DMA_VM_RESULT_FAIL: x', 'BUG: x',
-                      'WARNING: x', 'Oops: x', 'Kernel panic', 'Call trace:', 'DMA_AUDIT_FAULT_FAIL: x'):
+                      'WARNING: x', 'Oops: x', 'Kernel panic', 'Call trace:', 'DMA_AUDIT_FAULT_FAIL: x',
+                      'DMA_AUDIT_ACCOUNTING_FAIL: x'):
             with self.subTest(error=error), self.assertRaises(ValueError):
                 module.check_log(PASS + '\n' + error)
         with self.assertRaises(ValueError):
@@ -126,6 +128,21 @@ class Runner(unittest.TestCase):
             self.assertEqual(cmd[cmd.index(flag) + 1], 'none')
         self.assertEqual(cmd[cmd.index('-smp') + 1], '4')
         self.assertFalse(any(word in cmd for word in ('-drive', '-hda', '-device', '-netdev', '-virtfs')))
+
+    def test_accounting_rejects_leak_underflow_wrong_identity_and_order(self):
+        for before, after in (('retry=12288', 'retry=16384'), ('partial=16384', 'partial=12288'),
+                              ('partial=16384', 'partial=8192'), ('partial=16384', 'partial=24576'),
+                              ('before=12288', 'before=12289'), ('UNWIND id=3', 'UNWIND id=1'),
+                              ('UNWIND id=3 mode=0', 'UNWIND id=3 mode=1'), ('DMA_AUDIT_UNWIND', 'missing')):
+            with self.subTest(before=before), self.assertRaises(ValueError):
+                module.check_log(PASS.replace(before, after, 1))
+        module.check_log(PASS.replace('partial=16384', 'partial=20480'))  # PTE + PMD pages.
+        with self.assertRaises(ValueError):
+            module.check_log(PASS + '\nDMA_AUDIT_UNWIND id=3 mode=0 before=12288 partial=16384 retry=12288\n')
+        returned = 'DMA_AUDIT_FAULT_RETURN id=3 mode=0 result=-12 fired=1'
+        unwound = 'DMA_AUDIT_UNWIND id=3 mode=0 before=12288 partial=16384 retry=12288'
+        with self.assertRaises(ValueError):
+            module.check_log(PASS.replace(returned + '\n' + unwound, unwound + '\n' + returned))
 
 
 if __name__ == '__main__':

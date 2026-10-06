@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 
-REQUIRED = ('ARM64', 'ARM64_4K_PAGES', 'ARM64_VA_BITS_39', 'SMP', 'BLK_DEV_INITRD',
+REQUIRED = ('ARM64', 'ARM64_4K_PAGES', 'ARM64_VA_BITS_39', 'MMU', 'SMP', 'BLK_DEV_INITRD',
             'BINFMT_ELF', 'PROC_FS', 'SYSFS', 'SERIAL_AMBA_PL011',
             'SERIAL_AMBA_PL011_CONSOLE', 'XIAOMI_DMABUF_HUGETLB', 'XIAOMI_DMABUF_RUNTIME_AUDIT')
 
@@ -26,7 +26,7 @@ def check_log(text):
                    'DMA_GUEST_PASS:', 'DMA_VM_RESULT_PASS:'):
         if text.count(marker) != 1:
             raise ValueError('missing/duplicate guest completion: ' + marker)
-    if re.search(r'DMA_(?:GUEST_FAIL|VM_RESULT_FAIL|AUDIT_FAULT_FAIL)|BUG:|WARNING:|Oops:|Kernel panic|Call trace:', text):
+    if re.search(r'DMA_(?:GUEST_FAIL|VM_RESULT_FAIL|AUDIT_FAULT_FAIL|AUDIT_ACCOUNTING_FAIL)|BUG:|WARNING:|Oops:|Kernel panic|Call trace:', text):
         raise ValueError('guest/kernel failure reported')
     allocations = list(re.finditer(r'DMA_AUDIT_ALLOC id=([1-9][0-9]*) mode=([01]) bytes=4194304 fault=([01])\r?\n', text))
     releases = list(re.finditer(r'DMA_AUDIT_RELEASE id=([1-9][0-9]*) mode=([01])\r?\n', text))
@@ -37,6 +37,9 @@ def check_log(text):
         raise ValueError('allocation IDs must be unique')
     faults = list(re.finditer(r'DMA_AUDIT_FAULT id=([1-9][0-9]*) mode=([01]) ordinal=2 published=1 table=1\r?\n', text))
     returns = list(re.finditer(r'DMA_AUDIT_FAULT_RETURN id=([1-9][0-9]*) mode=([01]) result=-12 fired=1\r?\n', text))
+    unwinds = list(re.finditer(r'DMA_AUDIT_UNWIND id=([1-9][0-9]*) mode=([01]) before=([0-9]+) partial=([0-9]+) retry=([0-9]+)\r?\n', text))
+    if len(unwinds) != 2 or text.count('DMA_AUDIT_UNWIND') != 2:
+        raise ValueError('missing/duplicate/malformed page-table accounting evidence')
     if (len(faults) != 2 or len(returns) != 2 or text.count('DMA_AUDIT_FAULT id=') != 2 or
             text.count('DMA_AUDIT_FAULT_RETURN') != 2 or text.count('DMA_GUEST_ENOMEM_PASS:') != 2):
         raise ValueError('missing/duplicate/malformed partial ENOMEM evidence')
@@ -61,10 +64,14 @@ def check_log(text):
         if inject:
             fired = [match for match in faults if match.group(1) == allocation.group(1) and match.group(2) == str(mode)]
             returned = [match for match in returns if match.group(1) == allocation.group(1) and match.group(2) == str(mode)]
+            unwound = [match for match in unwinds if match.group(1) == allocation.group(1) and match.group(2) == str(mode)]
             retry = 'DMA_GUEST_ENOMEM_PASS: /dev/recovered-dma-audit-' + device + ' same_address_retry=1'
-            if len(fired) != 1 or len(returned) != 1 or text.count(retry) != 1:
+            if len(fired) != 1 or len(returned) != 1 or len(unwound) != 1 or text.count(retry) != 1:
                 raise ValueError('partial ENOMEM ID/mode/retry mismatch: ' + device)
-            if not allocation.start() < fired[0].start() < returned[0].start() < text.index(retry) < text.index(boundary):
+            before, partial, after = map(int, unwound[0].group(3, 4, 5))
+            if before % 4096 or after != before or partial - before not in (4096, 8192):
+                raise ValueError('page-table accounting did not return to baseline: ' + device)
+            if not allocation.start() < fired[0].start() < returned[0].start() < unwound[0].start() < text.index(retry) < text.index(boundary):
                 raise ValueError('partial ENOMEM lifetime order wrong: ' + device)
 
 
@@ -110,7 +117,8 @@ def run(args):
         'kernel_sha256': hashlib.sha256(image).hexdigest(),
         'initramfs_sha256': hashlib.sha256(initramfs).hexdigest(),
         'verified': ['basic guest workload', 'four file-owned buffers freed exactly once after final unmap',
-                     'PMD/PTE ordinal-two ENOMEM after one published block; same-address retry'] if reason is None else [],
+                     'PMD/PTE ordinal-two ENOMEM after one published block; same-address retry',
+                     'page-table accounting returns to baseline after selected partial ENOMEM'] if reason is None else [],
         'pending': ['all allocator failure sites and accounting', 'stock GPU producer activation', 'hardware/complete lifetime'],
     }
     (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')

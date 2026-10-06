@@ -132,6 +132,16 @@ are required in serial. Run 37494587692 passed these new assertions; older
 This deliberately injects the allocation-failure outcome at the exact call
 site, not a global allocator failure; other allocation sites/accounting and full
 hardware lifetimes still require additional gates.
+New accounting gate (runtime pending): read the pinned ACK
+`mm_pgtables_bytes()` before the failing remap, after the first block is
+published and at entry to the same task/mm's retry. It requires a temporary
+increase of one or two 4 KiB table pages, then exact return to the baseline
+before allocating for retry. The failed-mmap guest sequence has no worker
+threads during this interval. Tokens are compared, never dereferenced after the
+callback; this is bounded audit instrumentation, not a production ownership API.
+`DMA_AUDIT_UNWIND` must match the fault ID/mode and precede the guest's successful
+retry marker. Missing evidence, changed context, leak, underflow or wrong order
+fails closed. Run 37494587692 predates this gate and does not prove accounting.
 The basic workload executed successfully in run 37428061875. That run does not
 verify final allocation-free count or fault-injected partial ENOMEM unwind and
 does not prove all lifetimes. The later 37494587692 run proves the selected

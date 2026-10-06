@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/audit-rodin-dma-producer.yml
       - scripts/prepare-dmabuf-runtime-audit.py
+      - scripts/test-dmabuf-runtime-producer-source.py
       - scripts/prepare-dmabuf-fault-sites.py
       - scripts/test-dmabuf-fault-sites.py
       - scripts/test-dmabuf-audit-fault-plan.py
