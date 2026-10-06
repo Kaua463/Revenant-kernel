@@ -164,9 +164,19 @@ Regressão após modo zap: todos os diferenciais DMA anteriores + modo zap + dep
 
 Modo `--teardown move-zap` executa corpo move_dmabuf_huge_pmd stock entre remap e zap, contra C reconstruído existente, sem reinicializar owner/list ou tabelas. 173 moves na mesma página de PMDs, 16 cadeias de falha parcial prévia; clearing old/publicação new/retorno/accounting/metadados/helper/barrier/TLBI trace comparados após cada etapa. Depósitos e metadados permanecem byte-a-byte iguais durante move; depois os destinos são removidos, owner drena, pgtables_bytes restaura inicial, 123 zaps repetidos não free novamente. Destinos privados ficam nos índices 128+ da mesma tabela PMD; não significa mremap de VMA real, apenas encadeamento dos helpers. Tabelas inicialmente vazias, nenhum mapeamento externo/remapeamento concorrente.
 
-Perfil arquitetural privado explícito: ASID=0, sem ASID pareado, range-TLBI, MTE ou notifier secundário; system_cpucaps BSS zero, mm.context/notifier_subscriptions zero. TLBI ASID é registrado com opcode/operando e pulado no emulador, não invalida MMU. Sync icache modelado; rmap false, file/anon NULL. Tipos/offsets BTF adicionais validados. Move dentro da mesma página PMD **não** executa transferência withdraw/deposit entre owners; esse ramo continua pendente neste encadeamento, apesar do teste isolado. Split, caller VMA/lifetime, SMP, alternativas aplicadas no boot e hardware continuam gates. Sem integrar/flash.
+Perfil arquitetural privado explícito: ASID=0, sem ASID pareado, range-TLBI, MTE ou notifier secundário; system_cpucaps BSS zero, mm.context/notifier_subscriptions zero. TLBI ASID é registrado com opcode/operando e pulado no emulador, não invalida MMU. Sync icache modelado; rmap false, file/anon NULL. Tipos/offsets BTF adicionais validados. Move dentro da mesma página PMD **não** executa transferência withdraw/deposit entre owners; modo distinto abaixo cobre esse ramo. Split, caller VMA/lifetime, SMP, alternativas aplicadas no boot e hardware continuam gates. Sem integrar/flash.
 
 Regressão após move-zap: suíte DMA completa, modos withdraw/zap/move-zap, helpers ACK separados e BTF passaram; split com default 200. Nenhuma mudança de recipe/produção/config/workflow/device.
+
+### Encadeamento entre páginas PMD diferentes
+
+`--teardown cross-move-zap`: segundo buffer PMD privado de 4KiB e segundo ptdesc de 64 bytes, com owner/ptl próprios e offsets BTF já verificados. Não combina artificialmente os dois owners; pmd_huge_pte/pmd_lockptr host selecionam descriptor da página correta. 173 moves executam corpo stock move com locks old→new, withdraw real no source, deposit real no dest, publicação e unlock new→old; contra reconstrução C + corpos ACK. Ambos os buffers PMD e os dois descriptors/listas são comparados a cada move/zap. Mesmo perfil arquitetural limitado descrito acima.
+
+Além do diferencial, checks independentes percorrem ambas as listas circulares: next/prev recíprocos, range/alinhamento dos nodes, ciclos válidos e nenhum node duplicado. União das listas precisa ser exatamente o conjunto de tabelas alocadas menos retiradas/liberadas, e interseção vazia. Depois de cada move cross, old contém N-step-1, new contém step+1. Source owner drena após último move; zap no destino esvazia ambos, limpa todos os PMDs e restaura accounting. Inclui 16 cadeias de remap parcial e 123 zaps repetidos sem free extra. Lock/free seguem modelos privados, sem prova de exclusão real/allocator/MMU/SMP.
+
+Modos anteriores mantidos e passaram com esses novos checks. Segundo buffer existe só no fixture: não instala PGD/VMA para destino real, não prova mremap caller, novo alocador ou hardware. PTE fixture mantém somente sua rota anterior. Próximos gaps: split encadeado, callers/lifetime/consumidor real, integração/Kbuild/KMI/SMP/hardware.
+
+Regressão deste checkpoint: quatro modos de remap/teardown, todos os demais diferenciais DMA, helpers ACK separados e BTF passaram (split default 200). Fonte/config/hashes/BTF gates preservados. Sem alterações de produção/workflow/config/flash.
 
 ### Callers: inventário dedicado e primeiro hook executado
 
