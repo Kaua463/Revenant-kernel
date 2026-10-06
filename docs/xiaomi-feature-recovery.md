@@ -618,6 +618,39 @@ Esse job não executa VM. Produtor37494587692 confirmado Compile audit kernel
 in_progress após source/integration/format/selector gates aprovados.
 Runtime partial-ENOMEM/free, original activation e hardware continuam pendentes.
 
+### Checkpoint — ENOMEM/retry/final-free reais aprovados; alternativas classificadas
+
+Run37494587692/head14c66587c2dae3ccedf2a0f06eb8f5849a96534e completed
+success, incluindo Compile/ELF-provider/QEMU. Artifact baixado em
+outputs/dma-producer-vm-37494587692/dma-producer-compile-5/dma-evidence.
+Config/serial reais revalidados pelo checker local atual. Image SHA
+cb17378ae79198f7ce2681c4174191dd74790af4a1178ad25cefaaba44aee611;
+initramfs SHA1a5a5473b8411c0ef27e2fe25100b32f4c35f0779d4f5dc1b28bd5912f6142ed.
+IDs1..4 alloc→last-unmap→release→case-pass exatamente uma vez. Readers
+11/9/10/11 passes. Fault IDs3(PMD)/4(PTE): ordinal2,published1,table1,
+result=-12,fired1; guest same-address retry=1 e workload completo aprovados.
+Sem BUG/WARNING/Oops/panic. Release marker após __free_pages+kfree reais.
+Prova esses casos, não every failure site/accounting/SMP/producer/hardware.
+Runtime é ACK puro sem KSU/SUSFS; composto continua compile/ABI apenas.
+
+Busca interior agora cobre todo span inferido de1200bytes da remap, não só
+entry. Actual scan encontrou18 branches:17 locais,1 externo aparente em
+0xffffffc0803bccdc→0xffffffc0803bbb18. Não é caller da função vizinha:
+BTF stock alt_instr validado12bytes, campos orig_offset/alt_offset s32,
+cpucap16,orig_len8,alt_len8; 29.849 entradas extraídas de __alt_instructions.
+Entry0xffffffc081d3e178 associa replacement0xffffffc0803bccdc, original
+0xffffffc0803bbb14,cap53,len4/4. Branch retorna original+4; é alternative
+replacement do próprio remap, owner por next-symbol seria falso positivo.
+Analisador agora registra contexto de alternativas sem presumir CPU patch
+selecionado. Report outputs/stock-dma-activation-patterns-20261006-v5.json:
+0external-nonalternative branches;0entry refs;1661 ORR masks bit39.
+Onze decoder tests e módulo ELF test passaram, incluindo signed PREL offsets,
+BTF drift, interior/local/bounds. Nenhum input stock alterado/alternativa aplicada.
+
+Ainda obrigatório: todos failures/accounting/complete MMU/lifetimes, registro/
+callback/ativação real Xiaomi, runtime composto e hardware. Installer bloqueado,
+nenhum flash; T20 continua ~. Evidência real não substituída por mocks.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

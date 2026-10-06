@@ -23,6 +23,53 @@ def branch(word, pc):
     return pc + (signed(word & 0x3ffffff, 26) << 2)
 
 
+def branch_span_candidate(word, pc, start, end):
+    if start >= end or start % 4 or end % 4:
+        raise ValueError('aligned nonempty inferred text span required')
+    destination = branch(word, pc)
+    if destination is None or not start <= destination < end:
+        return None
+    return {'kind': 'BL' if word >> 31 else 'B', 'destination': hex(destination),
+            'entry_offset': destination - start, 'source_within_span': start <= pc < end}
+
+
+def validate_alt_layout(records):
+    expected = [('orig_offset', 0, '1:int'), ('alt_offset', 32, '1:int'),
+                ('cpucap', 64, '1:unsigned short'), ('orig_len', 80, '1:unsigned char'),
+                ('alt_len', 88, '1:unsigned char')]
+    if not records:
+        raise ValueError('stock alt_instr BTF absent')
+    for record in records:
+        if record['size_bytes'] != 12 or len(record['members']) != len(expected):
+            raise ValueError('stock alt_instr size/member drift')
+        for member, (name, offset, integer) in zip(record['members'], expected):
+            if (member['name'] != name or member['offset_bits'] != offset or member['bitfield_bits'] or
+                    not member['type'].rstrip(')').endswith(integer)):
+                raise ValueError('stock alt_instr field drift: ' + name)
+
+
+def alternative_entries(data, base, low, high):
+    if not base <= low < high <= base + len(data) or (high - low) % 12:
+        raise ValueError('file-backed complete alternative table required')
+    records = []
+    for site in range(low, high, 12):
+        orig, alt, cpucap, orig_len, alt_len = struct.unpack_from('<iiHBB', data, site - base)
+        records.append({'metadata_site': hex(site), 'original_site': hex(site + orig),
+                        'replacement_site': hex(site + 4 + alt), 'cpucap': cpucap,
+                        'original_length': orig_len, 'replacement_length': alt_len})
+    return records
+
+
+def alternative_context(records, site, destination):
+    contexts = []
+    for record in records:
+        replacement = int(record['replacement_site'], 16)
+        if replacement <= site < replacement + record['replacement_length']:
+            contexts.append(dict(record, branch_to_original_continuation=
+                                 destination == int(record['original_site'], 16) + record['original_length']))
+    return contexts
+
+
 def adr(word, pc):
     if word & 0x1f000000 != 0x10000000:
         return None
@@ -115,6 +162,15 @@ def run(args):
         raise ValueError('evidence already exists')
     kernel = evidence.Kernel(args.image, args.symbols)
     target = kernel.address('dmabuf_huge_remap_pfn_range')
+    target_span = kernel.span('dmabuf_huge_remap_pfn_range')
+    if not target_span or len(target_span) % 4:
+        raise ValueError('file-backed aligned inferred target span required')
+    target_end = target + len(target_span)
+    alt_layout = [kernel.btf.record(ident) for ident, item in enumerate(kernel.btf.types)
+                  if item['kind'] == 4 and item['name'] == 'alt_instr']
+    validate_alt_layout(alt_layout)
+    alternatives = alternative_entries(kernel.data, kernel.base, kernel.address('__alt_instructions'),
+                                       kernel.address('__alt_instructions_end'))
     addresses = sorted(kernel.names_at)
     boundaries = set(addresses)
     def record(pc, **fields):
@@ -129,7 +185,7 @@ def run(args):
             regions.append((low, high))
     if not regions:
         raise ValueError('no verified text regions')
-    direct, materialized, masks = [], [], []
+    direct, span_branches, materialized, masks = [], [], [], []
     from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
     decoder = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
     decoder.detail = True
@@ -140,6 +196,13 @@ def run(args):
             word = struct.unpack_from('<I', data, offset)[0]
             if branch(word, pc) == target:
                 direct.append(record(pc, kind='BL' if word >> 31 else 'B'))
+            span_candidate = branch_span_candidate(word, pc, target, target_end)
+            if span_candidate:
+                # Inferred next-symbol spans can contain alternative replacement
+                # code belonging to earlier functions. Use exact stock metadata.
+                span_candidate['alternative_context'] = alternative_context(
+                    alternatives, pc, int(span_candidate['destination'], 16))
+                span_branches.append(record(pc, **span_candidate))
             decoded = adr(word, pc)
             if decoded:
                 register, address, page = decoded
@@ -162,8 +225,14 @@ def run(args):
                   target=hex(target), image_sha256=IMAGE_SHA, symbols_sha256=SYMBOL_SHA,
                   regions=[(hex(low), hex(high)) for low, high in regions],
                   direct_entry_branches=direct, entry_address_patterns=materialized,
+                  inferred_target_span=[hex(target), hex(target_end)],
+                  inferred_target_span_sha256=hashlib.sha256(target_span).hexdigest(),
+                  branches_to_inferred_target_span=span_branches,
+                  alternative_btf_layout=alt_layout, alternative_metadata_entries=len(alternatives),
                   absolute_entry_values=absolute, orr_masks_containing_bit39=masks,
                   limits=['text includes possible padding/CFI data; no CFG reachability proof',
+                          'target end inferred from next symbol; interior branches can be local, not callers',
+                          'alternative metadata assigns replacement context; does not prove selected CPU patch/runtime reachability',
                           'ORR bit39 does not prove VMA ownership or a vm_flags store',
                           'ADRP/ADD window at most 8 instructions; no register-copy/loaded/relocated/dynamic lookup resolution',
                           'linear patterns stop on control/clobbers/symbols; no incoming-edge or CFG reachability proof',
@@ -172,7 +241,9 @@ def run(args):
     with args.output.open('x') as stream:
         json.dump(report, stream, indent=2)
         stream.write('\n')
-    print(f'Candidates: direct={len(direct)}, address={len(materialized)}, absolute={len(absolute)}, ORR-bit39={len(masks)}; NOT activation proof')
+    external = sum(not item['source_within_span'] for item in span_branches)
+    nonalternative = sum(not item['source_within_span'] and not item['alternative_context'] for item in span_branches)
+    print(f'Candidates: direct={len(direct)}, span-branches={len(span_branches)} (external={external}, external-nonalternative={nonalternative}), address={len(materialized)}, absolute={len(absolute)}, ORR-bit39={len(masks)}; NOT activation proof')
 
 
 if __name__ == '__main__':

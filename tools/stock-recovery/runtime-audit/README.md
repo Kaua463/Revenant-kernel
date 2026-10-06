@@ -1,4 +1,4 @@
-# Disposable DMA runtime audit — source, not runtime proof
+# Disposable DMA runtime audit — bounded VM evidence, not shipping approval
 
 `audit-map-contract.h` is a **new test-producer preflight**, not Xiaomi code,
 not a shipping hook and not wired into any kernel build. It deliberately limits
@@ -38,8 +38,9 @@ Requirements before building/running the producer:
 For the planned file-owned allocation, the userspace non-anonymous mmap syscall
 has an independent `fget(fd)` reference: `ksys_mmap_pgoff` drops it only after
 `vm_mmap_pgoff` returns. That source-level relationship can protect backing
-during error unwind, even though the VMA's `fput` precedes unmap. It is **not yet
-tested as a full runtime sequence**. An in-kernel mmap caller without that
+during error unwind, even though the VMA's `fput` precedes unmap. Ordinal-two
+PMD/PTE failed-mmap sequences passed in run 37494587692; other failure paths
+remain unproven. An in-kernel mmap caller without that
 reference must not be assumed safe. A real GPU producer may have a different
 ownership contract and remains unverified.
 
@@ -71,8 +72,11 @@ It shares the existing audit concurrency group and never cancels a live audit.
 Run 37428061875 compiled and executed the basic ARM64 QEMU guest workload
 successfully; composed KSU/SUSFS compile/ABI run 37429423148 also passed.
 The workflow boots a RAM-only disposable VM but does not publish a VM image.
-Fault injection, complete unwind, stock producer activation and hardware remain
-unproven. These tests are not installation/shipping approval.
+Run 37494587692 subsequently passed the scoped ordinal-two ENOMEM,
+same-address retry and four final-release gates on the actual four-CPU VM;
+downloaded serial/config were checked again locally. Full failure-site/accounting
+matrix, stock producer activation and hardware remain unproven.
+These tests are not installation/shipping approval.
 
 The audit producer now logs unique allocation IDs and a final release event
 after both real backing/storage frees return, without reading freed storage.
@@ -80,7 +84,8 @@ The guest marks immediately before its final alias unmap; the runner requires
 one matching release per mode between that marker and case completion. Missing,
 duplicate, wrong-ID, malformed or out-of-order events fail closed. This is
 instrumentation only in the disposable producer; no new userspace control or
-shipping overlay change. A fresh VM run is required to prove this new gate.
+shipping overlay change. Run 37494587692 proves this gate for its four tested
+buffers, not every possible VMA lifetime.
 
 ```sh
 python3 scripts/test-dmabuf-runtime-producer-source.py
@@ -98,7 +103,7 @@ shared-write visibility, child partial unmap, mremap, mprotect split/restore,
 MAYEXEC refusal, parent partial unmap, cross-CPU verification and concurrent
 reader on the surviving alias during other-VMA teardown. Final alias unmaps.
 
-Partial ENOMEM audit integration (wired, runtime pending):
+Partial ENOMEM audit integration (selected VM gates passed):
 `prepare-dmabuf-fault-sites.py` takes the exact hash-pinned recovered
 `mm/huge_memory.c` and emits a separate copy with two audit-config-gated failure
 sites, immediately before deposited PMD-table allocation or PTE-table allocation.
@@ -122,14 +127,15 @@ The guest checks ENOMEM, mincore ENOMEM (no VMA), same-address NOREPLACE retry
 (including the producer's no-stale-table preflight), every data word and full
 basic alias/fork/move/split/SMP workload after retry. Four allocation/release IDs,
 two partial-map/failure/retry event sequences and strict final-unmap ordering
-are required in serial. Previous runs do not prove these new assertions.
+are required in serial. Run 37494587692 passed these new assertions; older
+37428061875 basic evidence does not prove them.
 This deliberately injects the allocation-failure outcome at the exact call
 site, not a global allocator failure; other allocation sites/accounting and full
 hardware lifetimes still require additional gates.
 The basic workload executed successfully in run 37428061875. That run does not
 verify final allocation-free count or fault-injected partial ENOMEM unwind and
-does not prove all lifetimes; the new final-release instrumentation has its own
-pending runtime gate.
+does not prove all lifetimes. The later 37494587692 run proves the selected
+final-release and ordinal-two partial-ENOMEM gates, not complete DMA/hardware.
 
 ```sh
 python3 scripts/test-dmabuf-guest-data.py

@@ -3,6 +3,7 @@
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 import struct
+import copy
 import unittest
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
 from capstone.arm64 import ARM64_OP_IMM
@@ -11,6 +12,50 @@ module = SourceFileLoader('dma_activation', str(Path(__file__).with_name('scan-d
 
 
 class Decoder(unittest.TestCase):
+    def test_alternative_signed_offsets_context_and_boundaries(self):
+        data = bytearray(0x100)
+        struct.pack_into('<iiHBB', data, 0x80, 0x1010 - 0x1080, 0x1030 - 0x1084, 53, 4, 4)
+        entries = module.alternative_entries(data, 0x1000, 0x1080, 0x108c)
+        self.assertEqual(entries[0]['original_site'], '0x1010')
+        self.assertEqual(entries[0]['replacement_site'], '0x1030')
+        self.assertTrue(module.alternative_context(entries, 0x1030, 0x1014)[0]['branch_to_original_continuation'])
+        self.assertFalse(module.alternative_context(entries, 0x1030, 0x1020)[0]['branch_to_original_continuation'])
+        self.assertEqual(module.alternative_context(entries, 0x1034, 0x1014), [])
+        for low, high in ((0xfff, 0x108c), (0x1080, 0x108b), (0x1080, 0x1101)):
+            with self.assertRaises(ValueError):
+                module.alternative_entries(data, 0x1000, low, high)
+
+    def test_alternative_btf_layout_rejects_guessed_fields(self):
+        fields = [('orig_offset', 0, '8:s32(1:int)'), ('alt_offset', 32, '8:s32(1:int)'),
+                  ('cpucap', 64, '8:u16(1:unsigned short)'), ('orig_len', 80, '8:u8(1:unsigned char)'),
+                  ('alt_len', 88, '8:u8(1:unsigned char)')]
+        valid = {'size_bytes': 12, 'members': [dict(name=name, offset_bits=offset, type=typ, bitfield_bits=0)
+                                              for name, offset, typ in fields]}
+        module.validate_alt_layout([valid])
+        with self.assertRaises(ValueError):
+            module.validate_alt_layout([])
+        for key, value in (('name', 'guess'), ('offset_bits', 8), ('type', '1:unsigned int'), ('bitfield_bits', 1)):
+            altered = copy.deepcopy(valid)
+            altered['members'][0][key] = value
+            with self.assertRaises(ValueError):
+                module.validate_alt_layout([altered])
+
+    def test_interior_branch_span_and_local_classification(self):
+        result = module.branch_span_candidate(0x94000201, 0x800, 0x1000, 0x1040)
+        self.assertEqual(result, {'kind': 'BL', 'destination': '0x1004',
+                                 'entry_offset': 4, 'source_within_span': False})
+        result = module.branch_span_candidate(0x17fffffd, 0x1010, 0x1000, 0x1040)
+        self.assertTrue(result['source_within_span'])
+        self.assertEqual(result['entry_offset'], 4)
+        for destination in (0xffc, 0x1000, 0x103c, 0x1040):
+            word = 0x94000000 | ((destination - 0x800) // 4)
+            self.assertEqual(module.branch_span_candidate(word, 0x800, 0x1000, 0x1040) is not None,
+                             0x1000 <= destination < 0x1040)
+        self.assertIsNone(module.branch_span_candidate(0xd503201f, 0x1000, 0x1000, 0x1040))
+        for start, end in ((0x1000, 0x1000), (0x1001, 0x1040), (0x1000, 0x1041)):
+            with self.assertRaises(ValueError):
+                module.branch_span_candidate(0x94000000, 0x800, start, end)
+
     def test_page_add_nonadjacent_and_destination(self):
         page, nop = 0x90000005, 0xd503201f
         addition = 0x91000000 | (0x120 << 10) | (5 << 5) | 7
