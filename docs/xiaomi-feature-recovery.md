@@ -282,6 +282,12 @@ Auditoria isolada Actions 37406739074, head 96eaa013b59c682058a168be65b210981094
 
 `validate-dmabuf-root-workflow.rb` passou no Ruby/Psych local: pins, tag object/commit checks, interface do driver, steps/actions allowlist, logs, limites e ausência de comandos build/device. Três negativos rejeitam pin alterado, permissão write e ADB adicionado. Sete unit gates do driver passaram novamente. Execução real do runner ainda por confirmar; integração completa não inferida do YAML nem dos mocks.
 
+### Resultado real: composição root + DMA passou
+
+Actions **37407816068**, head **4f8f9e5aff784bdef7bae7ca5ce3770b83f094b8**, concluiu **success**. Artifacts baixados em `outputs/dma-root-source-audit-37407816068/dma-root-source-audit-1`: log e composition.json conferidos. Root integrator chegou ao marker final com os 26 tracked files/manifest ceb50cf6...; driver só depois aplicou DMA e confirmou pre/postimages/cópias SUSFS. Composição ficou com **30 tracked files**, novo header DMA separado e três fontes SUSFS copiadas hash-pinadas. Manifest final **3b48c383849fa925e3b1a41dd013d668f8f1a4c0e3c179d9f8638a3b94e9c9c9**, agora também pinado no driver para rejeitar drift futuro. memory.c pós-SUSFS antes DMA SHA d44237ad7c613f5c1d3a006dfdd7e82b9d49124de1be3b281e24ae866f16c288; após ambos 8088c5083d4ba15a6d6b6f76f378fbe6e02f885e383da8ab3d6d67eba7b95c95. Quatro commits dos artifacts coincidem com os pins.
+
+Isso comprova execução real da **integração de fontes**, não apenas mock ou patch independente. Não compila e não fecha KMI/producer ownership/unwind, restante dos callbacks/refcounts nem MMU/SMP/hardware. status permanece REVIEW_ONLY_NOT_INSTALLABLE; audit de compilação 37406739074 continua separado no mesmo handle. Nenhum device/flash.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

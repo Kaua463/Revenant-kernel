@@ -16,6 +16,7 @@ import tempfile
 
 composition = SourceFileLoader('dma_root_composition', str(Path(__file__).with_name('validate-dmabuf-susfs-overlay.py'))).load_module()
 ROOT_MANIFEST = 'ceb50cf610affc7a7a671fb07568e5ec033e9d63ad12b7de1a51994f6c935fd2'
+COMPOSED_MANIFEST = '3b48c383849fa925e3b1a41dd013d668f8f1a4c0e3c179d9f8638a3b94e9c9c9'
 KSU_PIN = '234f6e040fcbca18b16d2398e1aa225712ec99ad'
 KSU_V330 = '3b18216f71df189ab3d1b1ce0bdb21be1268e771'
 KSU_UAPI = 'fc98ae0140c80815260ecaf86ddb6ef06ad29863'
@@ -106,8 +107,11 @@ def run(args):
         for name, sha in COPIED.items():
             if composition.digest(composition.payload(args.source, name)) != sha:
                 raise ValueError('DMA altered copied SUSFS source')
+        composed_sha = ordered_manifest(args.source, actual)
+        if composed_sha != COMPOSED_MANIFEST:
+            raise ValueError('composed ordered manifest drift')
         report.update(root_manifest_sha256=ROOT_MANIFEST,
-                      composed_tracked_manifest_sha256=ordered_manifest(args.source, actual),
+                      composed_tracked_manifest_sha256=composed_sha,
                       composed_tracked_paths=sorted(actual), copied_susfs_sources=COPIED,
                       scope='ROOT_INTEGRATION_AND_DMA_SOURCES_ONLY')
         report['pending'].remove('full KSUN/SUSFS integration manifest')
