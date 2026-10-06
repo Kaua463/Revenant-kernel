@@ -1,0 +1,176 @@
+name: Audit rodin root DMA compiled ABI (not flashable)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dyperos-3.0.304]
+    paths:
+      - .github/workflows/audit-rodin-dma-root-build.yml
+      - scripts/prepare-dmabuf-root-fragment.py
+      - scripts/test-dmabuf-root-fragment.py
+      - scripts/validate-dmabuf-root-build.rb
+
+permissions:
+  contents: read
+  actions: read
+
+# Shared with the isolated ACK audit: do not run two kernel audits concurrently.
+concurrency:
+  group: rodin-dma-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  KMI_BRANCH: common-android15-6.6
+  KMI_TAG: android15-6.6.77_r00
+  KMI_TAG_OBJECT: 79d26ca363880c3c6f7841045e46427bee6c3c3b
+  KMI_COMMIT: f7ebe251035c0d15ff90c6a0a320697932785fad
+  KSU_COMMIT: 234f6e040fcbca18b16d2398e1aa225712ec99ad
+  SUSFS_COMMIT: be7b7ef49a1e1b189c3abf00eacaa7ebdb4168c1
+  SUSFS_FIX_COMMIT: cd63f371d91fb7fc32014c75728fbb9b686d9ae9
+  STOCK_SCMVERSION: -gca30f3b4bef6-abogki440974771
+  STOCK_KERNEL_RELEASE: 6.6.77-android15-8-gca30f3b4bef6-abogki440974771-4k
+  CONTROL_ACK_RUN: '37406739074'
+  CONTROL_ACK_HEAD: 96eaa013b59c682058a168be65b2109810944e8a
+  CONTROL_ROOT_SOURCE_RUN: '37407816068'
+  CONTROL_ROOT_SOURCE_HEAD: 4f8f9e5aff784bdef7bae7ca5ce3770b83f094b8
+
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate completed controls and local gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for control in ACK ROOT_SOURCE; do
+            run_variable="CONTROL_${control}_RUN"
+            head_variable="CONTROL_${control}_HEAD"
+            expected_head="${!head_variable}"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/${!run_variable}" \
+              | python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["status"]=="completed" and r["conclusion"]=="success" and r["head_sha"]==sys.argv[1], "pinned control did not complete successfully"; print("PASS: pinned control",r["id"])' "$expected_head"
+          done
+          ruby scripts/validate-dmabuf-root-build.rb
+          python3 scripts/test-dmabuf-root-fragment.py
+          python3 scripts/test-dmabuf-root-integration-gates.py
+          python3 scripts/test-dmabuf-build-gates.py
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          while IFS= read -r apt_source; do
+            sudo rm -f "$apt_source"
+          done < <(sudo grep -RIl 'dl.google.com/linux/chrome' /etc/apt/sources.list.d || true)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates curl flex git kmod libelf-dev \
+            libssl-dev lz4 patch python3 python3-pyelftools rsync xz-utils zip zstd
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --fail --location --retry 5 https://storage.googleapis.com/git-repo-downloads/repo \
+            --output "$RUNNER_TEMP/bin/repo"
+          chmod +x "$RUNNER_TEMP/bin/repo"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Fetch exact ACK and root integration sources
+        run: |
+          set -euo pipefail
+          mkdir ws
+          cd ws
+          repo init --depth=1 -u https://android.googlesource.com/kernel/manifest \
+            -b "$KMI_BRANCH" -m default.xml
+          repo sync -c -j2 --no-tags --no-clone-bundle --fail-fast
+          git -C common fetch --depth=1 https://android.googlesource.com/kernel/common.git \
+            "refs/tags/$KMI_TAG:refs/tags/$KMI_TAG"
+          test "$(git -C common rev-parse "refs/tags/$KMI_TAG")" = "$KMI_TAG_OBJECT"
+          git -C common checkout --detach "$KMI_TAG"
+          test "$(git -C common rev-parse HEAD)" = "$KMI_COMMIT"
+          git clone --filter=blob:none --no-checkout https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+          git -C KernelSU-Next checkout --detach "$KSU_COMMIT"
+          git clone --filter=blob:none --no-checkout --branch gki-android15-6.6 \
+            https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+          git -C susfs4ksu checkout --detach "$SUSFS_COMMIT"
+          git clone --filter=blob:none --no-checkout https://github.com/WildKernels/kernel_patches.git susfs-fixes
+          git -C susfs-fixes checkout --detach "$SUSFS_FIX_COMMIT"
+      - name: Integrate verified root DMA then ROM ABI controls
+        run: |
+          set -euo pipefail
+          mkdir -p dma-root-build-evidence
+          python3 scripts/integrate-dmabuf-after-root.py \
+            --source ws/common --ksu-source ws/KernelSU-Next --susfs-source ws/susfs4ksu \
+            --fix-source ws/susfs-fixes --overlay tools/stock-recovery/overlays/dma-6.6.77 \
+            --output dma-root-build-evidence/composition.json 2>&1 | tee dma-root-source.log
+          python3 scripts/prepare-dmabuf-root-fragment.py \
+            --root configs/rodin-6.6.77-ksun-susfs.fragment \
+            --dma tools/stock-recovery/overlays/dma-6.6.77/enabled.fragment \
+            --output ws/common/arch/arm64/configs/dma_root_audit.fragment
+          python3 scripts/fix-rodin-boot-abi.py ws/common
+          python3 scripts/align-rodin-kmi.py ws/common
+          python3 scripts/check-stock-module-trust.py
+          cp configs/rodin-stock-304-modules.pem ws/common/certs/rodin-stock-304-modules.pem
+          stamp=ws/build/kernel/kleaf/impl/stamp.bzl
+          test "$(grep -Fc "stable_scmversion_cmd = \"echo '-maybe-dirty'\"" "$stamp")" -eq 1
+          sed -i "s|echo '-maybe-dirty'|echo '$STOCK_SCMVERSION'|" "$stamp"
+          test "$(grep -Fc "stable_scmversion_cmd = \"echo '$STOCK_SCMVERSION'\"" "$stamp")" -eq 1
+      - name: Compile composed DMA audit
+        run: |
+          set -euo pipefail
+          cd ws
+          tools/bazel build --lto=none --page_size=4k \
+            --defconfig_fragment=//common:arch/arm64/configs/dma_root_audit.fragment \
+            //common:kernel_aarch64_dist 2>&1 | tee "$GITHUB_WORKSPACE/dma-root-build.log"
+          grep -F -- '-- KernelSU-Next version: 33239' "$GITHUB_WORKSPACE/dma-root-build.log"
+          grep -F -- '-- KernelSU-Next tag: v3.3.0' "$GITHUB_WORKSPACE/dma-root-build.log"
+          if grep -Eq 'KernelSU-Next (version|tag) fallback:' "$GITHUB_WORKSPACE/dma-root-build.log"; then exit 1; fi
+      - name: Check DMA providers and ROM module ABI
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from importlib.machinery import SourceFileLoader
+          from pathlib import Path
+          import shutil
+          import subprocess
+          m=SourceFileLoader('dma_build','scripts/check-dmabuf-build.py').load_module()
+          out=Path('dma-root-build-evidence')
+          for pattern,name in [('vmlinux','vmlinux-path'),('*.config','config'),('Module.symvers','Module.symvers'),('Image','image-path')]:
+              raw=subprocess.check_output(['find','-L','ws/bazel-bin','-type','f','-name',pattern,'-path','*kernel_aarch64*','-print0'])
+              paths=sorted(Path(p.decode()) for p in raw.split(b'\0') if p)
+              chosen=m.select_equal(paths)
+              if name.endswith('-path'): (out/name).write_text(str(chosen.resolve())+'\n')
+              else: shutil.copyfile(chosen,out/name)
+          PY
+          vmlinux=$(<dma-root-build-evidence/vmlinux-path)
+          image=$(<dma-root-build-evidence/image-path)
+          python3 scripts/check-dmabuf-build.py --vmlinux "$vmlinux" \
+            --config dma-root-build-evidence/config --enabled y --output dma-root-build-evidence/providers.json
+          python3 scripts/check-stock-kfence.py dma-root-build-evidence/config
+          python3 scripts/check-stock-config-alignment.py dma-root-build-evidence/config
+          python3 scripts/rom-module-reference.py check --symvers dma-root-build-evidence/Module.symvers \
+            --image "$image" --config dma-root-build-evidence/config
+          python3 - <<'PY'
+          from importlib.machinery import SourceFileLoader
+          from pathlib import Path
+          m=SourceFileLoader('dma_config','scripts/prepare-dmabuf-root-fragment.py').load_module()
+          expected=m.settings(m.combine(Path('configs/rodin-6.6.77-ksun-susfs.fragment').read_text(),Path('tools/stock-recovery/overlays/dma-6.6.77/enabled.fragment').read_text()))
+          actual=m.settings(Path('dma-root-build-evidence/config').read_text())
+          assert all(actual.get(k)==v for k,v in expected.items()), 'compiled root/DMA setting differs from pinned fragment'
+          print('PASS: every requested root/DMA setting retained in compiled config')
+          PY
+          python3 - "$image" "$STOCK_KERNEL_RELEASE" <<'PY'
+          from pathlib import Path
+          import re,sys
+          banners=re.findall(rb'Linux version [^\0\n]+',Path(sys.argv[1]).read_bytes())
+          matching=[b for b in banners if b.startswith(('Linux version '+sys.argv[2]+' ').encode())]
+          assert len(matching)==1, 'exact stock release banner missing or ambiguous'
+          Path('dma-root-build-evidence/kernel-banner.txt').write_bytes(matching[0]+b'\n')
+          PY
+          git -C ws/.repo/manifests rev-parse HEAD > dma-root-build-evidence/build-manifest.commit
+      - name: Preserve audit evidence (no image or installer)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dma-root-build-audit-${{ github.run_number }}
+          path: |
+            dma-root-build.log
+            dma-root-source.log
+            dma-root-build-evidence/
+          if-no-files-found: warn

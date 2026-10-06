@@ -288,6 +288,14 @@ Actions **37407816068**, head **4f8f9e5aff784bdef7bae7ca5ce3770b83f094b8**, conc
 
 Isso comprova execução real da **integração de fontes**, não apenas mock ou patch independente. Não compila e não fecha KMI/producer ownership/unwind, restante dos callbacks/refcounts nem MMU/SMP/hardware. status permanece REVIEW_ONLY_NOT_INSTALLABLE; audit de compilação 37406739074 continua separado no mesmo handle. Nenhum device/flash.
 
+### Build composto DMA/root preparado, dependente dos controles
+
+`.github/workflows/audit-rodin-dma-root-build.yml`: auditoria de compilação separada, sem installer/release/device ou upload de Image. Usa **a mesma concurrency group** do audit ACK, cancel-in-progress=false: aguarda aquele run, não o interrompe e não compila simultaneamente. Antes de source fetch exige status completed/success e head exato dos controles ACK 37406739074/96eaa013... e root sources 37407816068/4f8f9e5...; falha de controle bloqueia antes de compilar. ACK/tag/root pins preservados. Driver real integra root→DMA; depois entram os controles ROM filemap/exports/KMI/certificado e SCM já usados no workflow stock-like. Não altera workflow diário nem adiciona GPUEB/network/governor ao audit.
+
+`prepare-dmabuf-root-fragment.py` combina fragments **hash-pinados** sem alterar nenhuma configuração root; só acrescenta THP=y e DMA=y. Rejects duplicatas, interseção de keys, delta extra, drift e output existente. Quatro unit tests passaram; merged SHA256 07b946c705ba5b814666e029641699acdb924f7abcbfe520731987c77aaa1169. Build gate verifica todas as configurações pedidas no .config real, não apenas KSU y. ELF provider/config auditor, KFENCE/config stock alignment e referência dos 610 módulos/78 assinaturas/import CRCs/certificado embutido integram o gate pós-compile. Aliases de vmlinux/config/Image/symvers só aceitos quando byte-identical. Release banner stock e metadata KSU 33239/v3.3.0 exigidos, fallback rejeitado.
+
+`validate-dmabuf-root-build.rb` passou com quatro negativos: controle adulterado, cancelamento, write permission, etapa ABI removida/device command. Bash -n de todos os blocos e compile dos três Python heredocs passaram. Sete unit gates root e cinco ELF/config gates passaram novamente. Workflow preparado **não é evidência de compilação concluída**; MMU/SMP/hardware, produtor/unwind e restante do lifetime continuam pendentes.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.
