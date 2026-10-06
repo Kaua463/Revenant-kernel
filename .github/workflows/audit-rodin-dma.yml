@@ -1,0 +1,109 @@
+name: Audit recovered rodin DMA (not flashable)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dyperos-3.0.304]
+    paths:
+      - .github/workflows/audit-rodin-dma.yml
+      - scripts/prepare-dmabuf-reimplementation.py
+      - scripts/validate-dmabuf-overlay.py
+      - scripts/check-dmabuf-build.py
+      - tools/stock-recovery/overlays/dma-6.6.77/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rodin-dma-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  KMI_BRANCH: common-android15-6.6
+  KMI_TAG: android15-6.6.77_r00
+  KMI_TAG_OBJECT: 79d26ca363880c3c6f7841045e46427bee6c3c3b
+  KMI_COMMIT: f7ebe251035c0d15ff90c6a0a320697932785fad
+
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - profile: disabled
+            enabled: 'n'
+          - profile: enabled
+            enabled: 'y'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          while IFS= read -r apt_source; do
+            sudo rm -f "$apt_source"
+          done < <(sudo grep -RIl 'dl.google.com/linux/chrome' /etc/apt/sources.list.d || true)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates curl flex git libelf-dev \
+            libssl-dev lz4 python3 python3-pyelftools rsync xz-utils zip zstd
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --fail --location --retry 5 \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            --output "$RUNNER_TEMP/bin/repo"
+          chmod +x "$RUNNER_TEMP/bin/repo"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Fetch pinned ACK
+        run: |
+          set -euo pipefail
+          mkdir ws
+          cd ws
+          repo init --depth=1 -u https://android.googlesource.com/kernel/manifest \
+            -b "$KMI_BRANCH" -m default.xml
+          repo sync -c -j2 --no-tags --no-clone-bundle --fail-fast
+          git -C common fetch https://android.googlesource.com/kernel/common.git \
+            "refs/tags/$KMI_TAG:refs/tags/$KMI_TAG" --depth=1
+          test "$(git -C common rev-parse "refs/tags/$KMI_TAG")" = "$KMI_TAG_OBJECT"
+          git -C common checkout --detach "$KMI_TAG"
+          test "$(git -C common rev-parse HEAD)" = "$KMI_COMMIT"
+      - name: Apply exact review overlay
+        run: |
+          set -euo pipefail
+          python3 scripts/validate-dmabuf-overlay.py --source ws/common \
+            --overlay tools/stock-recovery/overlays/dma-6.6.77 --apply-review
+          cp "tools/stock-recovery/overlays/dma-6.6.77/${{ matrix.profile }}.fragment" \
+            ws/common/arch/arm64/configs/dma_audit.fragment
+      - name: Compile audit kernel
+        run: |
+          set -euo pipefail
+          cd ws
+          tools/bazel build --lto=none --page_size=4k \
+            --defconfig_fragment=//common:arch/arm64/configs/dma_audit.fragment \
+            //common:kernel_aarch64_dist 2>&1 | tee "$GITHUB_WORKSPACE/dma-build.log"
+      - name: Check compiled providers
+        run: |
+          set -euo pipefail
+          mkdir -p dma-evidence
+          mapfile -t binaries < <(find -L ws/bazel-bin -type f -name vmlinux -path '*kernel_aarch64*')
+          test "${#binaries[@]}" -ge 1
+          mapfile -t configs < <(find -L ws/bazel-bin -type f -name '*.config' -path '*kernel_aarch64*')
+          test "${#configs[@]}" -ge 1
+          python3 scripts/check-dmabuf-build.py --vmlinux "${binaries[@]}" \
+            --config "${configs[@]}" --enabled '${{ matrix.enabled }}' \
+            --output dma-evidence/providers.json
+          cp "${configs[0]}" dma-evidence/config
+          cp tools/stock-recovery/overlays/dma-6.6.77/manifest.json dma-evidence/overlay-manifest.json
+          git -C ws/common diff --stat > dma-evidence/source-diff-stat.txt
+          repo_manifest=ws/.repo/manifests
+          git -C "$repo_manifest" rev-parse HEAD > dma-evidence/build-manifest-commit.txt
+      - name: Preserve audit logs (no installer or device operation)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dma-audit-${{ matrix.profile }}-${{ github.run_number }}
+          path: |
+            dma-build.log
+            dma-evidence/
+          if-no-files-found: warn

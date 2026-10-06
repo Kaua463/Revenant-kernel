@@ -1,0 +1,70 @@
+{
+  "status": "REVIEW_ONLY_NOT_INSTALLABLE",
+  "ack_commit": "f7ebe251035c0d15ff90c6a0a320697932785fad",
+  "image_sha256": "99485b0132e3aa28f4e965119591c8149fe3c20e7e0fd10d753ef014a582472e",
+  "patch_sha256": "57b75f3e59aa831d9cf744958002eef90e46795088140a1edd648f4ee63024ae",
+  "sources": {
+    "mm/mmap.c": "1e554a480b57fed37600bc36ff3cab66c164af29934ff88362e1ed4bb6e73e5e",
+    "mm/mremap.c": "0613e0605fd73f89fe2b8040e64f8293a8619b64d84a33cbb321f8dfc113ab7b",
+    "mm/Kconfig": "2a53d16cfe662c2f2ce425faa3cd9c1fb09e5071e570f7ebd0ab9b314c7e5e4a",
+    "mm/Makefile": "2d0a7c3900d0332a3069c8f201095bc3f6d142ab03d9c95bf23a6ea522479ed3",
+    "include/linux/huge_mm.h": "7424c9a89ff80e4435b3943b2a282c23b2e4445554682f87519607a7454308fe",
+    "include/linux/mm.h": "36ca8de78bcc1d76141df2e7e60654002086170305c19784072d1ec5b9323f25",
+    "include/linux/mm_types.h": "83217ab94bccfca029b38c6a503a4f6ae581d981a4afd60ffc0423a6cd5e8c4b",
+    "include/linux/pgtable.h": "bdfc3c9f86b18719f0bec51cfb5174918a81285da4eefefe9afd3880fac164fc",
+    "arch/arm64/include/asm/pgtable.h": "e1f09d4c505f326c18dc93ca18a132978232245b0bb0ea3669404f6cf52f5d61",
+    "mm/memory.c": "7cd250cb365f15977d74bb9283f9c0a8399c3c8dcd281b54aaeb1a987ce894cb",
+    "mm/huge_memory.c": "21500d58bf839040cd8caaa053f1004983f3d8cdbb64503ddbd54bd6b0cedf3a"
+  },
+  "recipes": {
+    "zap": "e9729739827c51eabb21323b16efdcc745aa7a1191c0efb5d8943ccc98a95938",
+    "split": "5dff89e30e137957427eeab75f1862e5626551436e6873e4dd21fea381886951",
+    "wrappers": "b49497af15be2f8527cee677aa59e21c7863a01e557d942180a35b7bcd0d151c",
+    "range": "7249d2e0471acbedf30c91d5e5c061a0271ac6910a12ee839c7134c7689e6b8a",
+    "move": "eeb3d3a182ded7947049c8ee025b1ba88c6c51d19dc9440c5b9b6aa18c5e83bc",
+    "remap": "b14df72dfc60a08e119f55eeea6859a1343522a1c693729e506ff80eb20f1456",
+    "hooks": "9508bea66db25c1476cd956520b9ce0dfd76a2451acf36ba0398f6012e896825",
+    "unmap_hook": "ce75f93c05a468fa54ab7887038729c6471755b4ba24c71d60633f55632952ca",
+    "move_hook": "2333aecb3220c1fa1c50fbada7c16481600a62ff42ea2562071f73d2c9d26801",
+    "vma_hook": "352ce11903cd9418af2e5320d33df0da30f86894c29a17abbc4ee4664054c2bd"
+  },
+  "changes": {
+    "include/linux/xiaomi_dmabuf_huge.h": {
+      "before": null,
+      "after": "7d6679af5b33baddb1df4445f8764104a63167fa61c7d3887623652dd5a51df3"
+    },
+    "mm/Kconfig": {
+      "before": "2a53d16cfe662c2f2ce425faa3cd9c1fb09e5071e570f7ebd0ab9b314c7e5e4a",
+      "after": "feebe3daf120b05b4a371ba722a86d7aa48ee00ed9f10858dc67043798d03916"
+    },
+    "mm/huge_memory.c": {
+      "before": "21500d58bf839040cd8caaa053f1004983f3d8cdbb64503ddbd54bd6b0cedf3a",
+      "after": "38cd7923afc140242eac6f11aa546de2ad80d82e5d98f3514f743f0a4312f15c"
+    },
+    "mm/memory.c": {
+      "before": "7cd250cb365f15977d74bb9283f9c0a8399c3c8dcd281b54aaeb1a987ce894cb",
+      "after": "d57c0bde9ca5eeb4326344a9dd9ffd94edcf16d46f04abc8d4ea108cc1ec21b9"
+    },
+    "mm/mmap.c": {
+      "before": "1e554a480b57fed37600bc36ff3cab66c164af29934ff88362e1ed4bb6e73e5e",
+      "after": "13ec3072b605db7a01b6faa38d57bb242a098cd90af0312ce0cefda8803d74b0"
+    },
+    "mm/mremap.c": {
+      "before": "0613e0605fd73f89fe2b8040e64f8293a8619b64d84a33cbb321f8dfc113ab7b",
+      "after": "a6a65c52175d392187d3e2166700390a1fdf2c083f2f9a5a4c1c99d805696385"
+    }
+  },
+  "pending": [
+    "Kbuild enabled/disabled",
+    "KMI/module audit",
+    "producer alignment/ownership/unwind",
+    "VMA callbacks/refcounts",
+    "MMU/SMP/lifetime/hardware"
+  ],
+  "safety_deviations": [],
+  "preserved_hazards": [
+    "PMD remap ignores pmd_set_huge result; no 2MiB extent/alignment guard",
+    "ENOMEM leaves partial mappings",
+    "adj_next>0 dereferences next before null check"
+  ]
+}

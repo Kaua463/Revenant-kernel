@@ -1,0 +1,554 @@
+--- /dev/null
++++ b/include/linux/xiaomi_dmabuf_huge.h
+@@ -0,0 +1,84 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Exact rodin stock contract; review-only until integration gates pass. */
++#ifndef _LINUX_XIAOMI_DMABUF_HUGE_H
++#define _LINUX_XIAOMI_DMABUF_HUGE_H
++#include <linux/mm.h>
++#include <linux/huge_mm.h>
++
++#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB
++/* Recovered bit; original Xiaomi macro spelling is not established. */
++#define VM_XIAOMI_DMABUF_HUGE (1UL << 39)
++struct mmu_gather;
++spinlock_t *__pmd_dmabuf_huge_lock(pmd_t *, struct vm_area_struct *);
++int zap_dmabuf_huge_pmd(struct mmu_gather *, struct vm_area_struct *, pmd_t *, unsigned long);
++void __split_dmabuf_huge_pmd(struct vm_area_struct *, pmd_t *, unsigned long, bool, struct folio *);
++void zap_split_dmabuf_huge_pmd(struct vm_area_struct *, pmd_t *, unsigned long, bool, struct folio *);
++void split_dmabuf_huge_pmd_address(struct vm_area_struct *, unsigned long, bool, struct folio *);
++void vma_adjust_dmabuf_huge(struct vm_area_struct *, unsigned long, unsigned long, long);
++void __split_dmabuf_huge_range(struct vm_area_struct *);
++void split_dmabuf_huge_range(struct vm_area_struct *);
++bool move_dmabuf_huge_pmd(struct vm_area_struct *, unsigned long, unsigned long, pmd_t *, pmd_t *, bool);
++int dmabuf_huge_remap_pfn_range(struct vm_area_struct *, unsigned long, unsigned long, unsigned long, pgprot_t, unsigned int);
++/* Hook recipe only: copy_page_range after vma_needs_copy succeeds,
++ * before its is_cow/notifier/page-table walk. Not installed or exported.
++ */
++static inline void dmabuf_huge_fork_prepare(struct vm_area_struct *dst,
++		struct vm_area_struct *src)
++{
++	if (src->vm_flags & VM_XIAOMI_DMABUF_HUGE) {
++		split_dmabuf_huge_range(src);
++		vm_flags_clear(src, 1UL << 39);
++		vm_flags_clear(dst, 1UL << 39);
++	}
++}
++
++/* Review-only zap_pmd_range hook. Call instead of the generic huge-PMD
++ * branch when VMA bit 39 is set. true skips PTE removal; false falls through
++ * to the existing pmd_none/zap_pte_range path. Not installed/exported.
++ */
++static inline bool dmabuf_huge_unmap_prepare(struct mmu_gather *tlb,
++		struct vm_area_struct *vma, pmd_t *pmd,
++		unsigned long addr, unsigned long next)
++{
++	if (pmd_trans_huge(*pmd)) {
++		if (next - addr == HPAGE_PMD_SIZE)
++			return zap_dmabuf_huge_pmd(tlb, vma, pmd, addr) != 0;
++		zap_split_dmabuf_huge_pmd(vma, pmd, addr, false, NULL);
++	}
++	return false;
++}
++
++/* Review-only move_page_tables hook for VMA bit 39. true consumes extent;
++ * false resumes existing PTE path. No destination/extent validation here:
++ * those belong to the caller and move helper. Not installed/exported.
++ */
++static inline bool dmabuf_huge_move_prepare(struct vm_area_struct *vma,
++		unsigned long old_addr, unsigned long new_addr,
++		pmd_t *old_pmd, pmd_t *new_pmd, unsigned long extent,
++		bool need_rmap_locks)
++{
++	if (pmd_trans_huge(*old_pmd)) {
++		if (extent == HPAGE_PMD_SIZE &&
++			move_dmabuf_huge_pmd(vma, old_addr, new_addr,
++				old_pmd, new_pmd, need_rmap_locks))
++			return true;
++		__split_dmabuf_huge_pmd(vma, old_pmd, old_addr, false, NULL);
++	}
++	return false;
++}
++
++/* Review-only VMA boundary-change recipe; caller must hold its VMA write
++ * lock and finish vma_prepare first. All observed callers pass adj_next=0.
++ * Does not replace allocation, maple-tree or VMA lifetime management.
++ */
++static inline void dmabuf_huge_adjust_prepare(struct vm_area_struct *vma,
++		unsigned long start, unsigned long end)
++{
++	if (vma->vm_flags & VM_XIAOMI_DMABUF_HUGE)
++		vma_adjust_dmabuf_huge(vma, start, end, 0);
++	else
++		vma_adjust_trans_huge(vma, start, end, 0);
++}
++
++#endif /* CONFIG_XIAOMI_DMABUF_HUGETLB */
++#endif
+--- a/mm/Kconfig
++++ b/mm/Kconfig
+@@ -1316,6 +1316,17 @@
+ 	bool
+ 	depends on !STACK_GROWSUP
+ 
++
++config XIAOMI_DMABUF_HUGETLB
++	bool "Recovered rodin DMA-BUF huge mappings (experimental)"
++	depends on ARM64 && ARM64_4K_PAGES && ARM64_VA_BITS_39
++	depends on TRANSPARENT_HUGEPAGE && HAVE_ARCH_HUGE_VMAP && SMP
++	default n
++	help
++	  Exact DyperOS 3.0.304 rodin PMD/PTE contract. Requires split PMD
++	  ptlocks and validated producer alignment/ownership. Do not enable
++	  in a shipping kernel until Kbuild/KMI/lifetime/MMU gates pass.
++
+ source "mm/damon/Kconfig"
+ 
+ endmenu
+--- a/mm/huge_memory.c
++++ b/mm/huge_memory.c
+@@ -6,6 +6,7 @@
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
+ #include <linux/mm.h>
++#include <linux/xiaomi_dmabuf_huge.h>
+ #include <linux/sched.h>
+ #include <linux/sched/mm.h>
+ #include <linux/sched/coredump.h>
+@@ -3994,3 +3995,331 @@
+ 	trace_remove_migration_pmd(address, pmd_val(pmde));
+ }
+ #endif
++
++#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB
++#if CONFIG_PGTABLE_LEVELS != 3 || !USE_SPLIT_PMD_PTLOCKS
++#error "Recovered DMA requires 3 page-table levels and split PMD locks"
++#endif
++atomic64_t dmabuf_hugetlb_pmd_map = ATOMIC64_INIT(0);
++atomic64_t dmabuf_hugetlb_contpte_map = ATOMIC64_INIT(0);
++atomic64_t dmabuf_hugetlb_pmd_zap = ATOMIC64_INIT(0);
++atomic64_t dmabuf_hugetlb_pmd_split = ATOMIC64_INIT(0);
++
++/* Pinned stock lock/zap semantics, NOT installed.
++ * Requires split PMD ptlocks (pmd_ptdesc/ptlock_ptr match this ARM64 stock).
++ * Deposited PTE-table release is not DMA-BUF backing-page release.
++ */
++spinlock_t *__pmd_dmabuf_huge_lock(pmd_t *pmd, struct vm_area_struct *vma)
++{
++	spinlock_t *ptl = ptlock_ptr(pmd_ptdesc(pmd));
++
++	(void)vma;
++	spin_lock(ptl);
++	if (!pmd_trans_huge(*pmd)) {
++		spin_unlock(ptl);
++		return NULL;
++	}
++	return ptl;
++}
++
++int zap_dmabuf_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
++		pmd_t *pmd, unsigned long address)
++{
++	spinlock_t *ptl = __pmd_dmabuf_huge_lock(pmd, vma);
++	pgtable_t pgtable;
++
++	if (!ptl)
++		return 0;
++	pmdp_huge_get_and_clear(tlb->mm, address, pmd);
++	tlb_remove_pmd_tlb_entry(tlb, pmd, address);
++	pgtable = pgtable_trans_huge_withdraw(tlb->mm, pmd);
++	pte_free(tlb->mm, pgtable);
++	mm_dec_nr_ptes(tlb->mm);
++	spin_unlock(ptl);
++	atomic64_inc(&dmabuf_hugetlb_pmd_zap);
++	return 1;
++}
++
++/* Pinned DyperOS 3.0.304 ARM64 split-body reconstruction; NOT installed.
++ * PMD-to-PTE writes and helper/barrier ordering have exact-stock differential
++ * tests with modeled helpers. MMU notifier/TLB/lifetime/concurrency remain
++ * separate gates; no claim that a source tree can already ship this function.
++ * No anonymous-THP refcount/rmap operations are assumed for DMA-BUF mappings.
++ */
++void __split_dmabuf_huge_pmd(struct vm_area_struct *vma, pmd_t *pmd,
++		unsigned long address, bool freeze, struct folio *folio)
++{
++	struct mmu_notifier_range range;
++	struct mm_struct *mm = vma->vm_mm;
++	spinlock_t *ptl;
++	pgtable_t pgtable;
++	pmd_t old, table;
++	pte_t *pte, entry;
++	unsigned long offset, physical;
++	bool dirty;
++
++	(void)freeze;
++	address &= HPAGE_PMD_MASK;
++	mmu_notifier_range_init_owner(&range, MMU_NOTIFY_CLEAR, 0, mm,
++		address, address + HPAGE_PMD_SIZE, NULL);
++	mmu_notifier_invalidate_range_start(&range);
++	ptl = pmd_lock(mm, pmd);
++	if (!pmd_trans_huge(*pmd))
++		goto out;
++	if (folio && page_folio(pmd_page(*pmd)) != folio)
++		goto out;
++	pgtable = pgtable_trans_huge_withdraw(mm, pmd);
++	old = pmdp_invalidate(vma, address, pmd);
++	dirty = pmd_dirty(old);
++	pmd_populate(mm, &table, pgtable);
++	physical = pmd_val(old) & 0xffffffe00000UL;
++	for (offset = 0; offset < HPAGE_PMD_SIZE; offset += PAGE_SIZE) {
++		entry = __pte(pgprot_val(vma->vm_page_prot) | (physical + offset));
++		if (pmd_write(old))
++			entry = pte_mkwrite_novma(entry);
++		if (!pmd_young(old))
++			entry = pte_mkold(entry);
++		if (dirty)
++			entry = pte_mkdirty(entry);
++		pte = pte_offset_kernel(&table, address + offset);
++		BUG_ON(!pte_none(*pte));
++		set_pte_at(mm, address + offset, pte, pte_mkspecial(entry));
++	}
++	smp_wmb();
++	pmd_populate(mm, pmd, pgtable);
++	atomic64_inc(&dmabuf_hugetlb_pmd_split);
++out:
++	spin_unlock(ptl);
++	mmu_notifier_invalidate_range_end(&range);
++}
++
++/* Hash-pinned stock wrapper semantics; not installed.
++ * Page-table split, MMU/TLB and lifetime implementations remain unrecovered.
++ * freeze is deliberately ignored by stock wrappers: no inferred THP semantics.
++ */
++void zap_split_dmabuf_huge_pmd(struct vm_area_struct *vma, pmd_t *pmd,
++		unsigned long address, bool freeze, struct folio *folio)
++{
++	(void)freeze;
++	__split_dmabuf_huge_pmd(vma, pmd, address, false, folio);
++}
++
++void split_dmabuf_huge_pmd_address(struct vm_area_struct *vma,
++		unsigned long address, bool freeze, struct folio *folio)
++{
++	pmd_t *pmd;
++
++	(void)freeze;
++	pmd = mm_find_pmd(vma->vm_mm, address);
++	if (pmd)
++		__split_dmabuf_huge_pmd(vma, pmd, address, false, folio);
++}
++
++static void dmabuf_recovered_split_boundary(struct vm_area_struct *vma,
++		unsigned long address)
++{
++	pmd_t *pmd;
++
++	if ((address & (HPAGE_PMD_SIZE - 1)) && vma &&
++	    vma->vm_start <= (address & HPAGE_PMD_MASK) &&
++	    ((address + HPAGE_PMD_SIZE - 1) & HPAGE_PMD_MASK) <= vma->vm_end) {
++		pmd = mm_find_pmd(vma->vm_mm, address);
++		if (pmd)
++			__split_dmabuf_huge_pmd(vma, pmd, address, false, NULL);
++	}
++}
++
++void vma_adjust_dmabuf_huge(struct vm_area_struct *vma, unsigned long start,
++		unsigned long end, long adj_next)
++{
++	struct vm_area_struct *next;
++	unsigned long next_start;
++
++	dmabuf_recovered_split_boundary(vma, start);
++	dmabuf_recovered_split_boundary(vma, end);
++	if (adj_next > 0) {
++		next = find_vma(vma->vm_mm, vma->vm_end);
++		/* Stock dereferences next before its later NULL test. Caller lifetime
++		 * and find_vma success must be established before integration.
++		 */
++		next_start = next->vm_start + adj_next;
++		dmabuf_recovered_split_boundary(next, next_start);
++	}
++}
++
++/* Pinned stock: ARM64 4K/39-bit VA, three page-table levels. NOT installed.
++ * VMA bit 39 is a guard, produced by remap for map_type=0; original macro
++ * name and full caller contract remain unverified. No anonymous-THP semantics.
++ * Caller must supply a nonempty valid VMA range and stable page tables.
++ */
++#define DMABUF_RECOVERED_VMA_BIT_39 (1UL << 39)
++
++void __split_dmabuf_huge_range(struct vm_area_struct *vma)
++{
++	unsigned long address = vma->vm_start, end = vma->vm_end;
++	pgd_t *pgd = pgd_offset(vma->vm_mm, address);
++
++	do {
++		unsigned long next = pgd_addr_end(address, end);
++
++		if ((pgd_val(*pgd) & 3) == 3) {
++			pmd_t *pmd;
++
++			BUG_ON(!(vma->vm_flags & DMABUF_RECOVERED_VMA_BIT_39));
++			/* Exact stock descriptor PA mask, not generic PHYS_MASK. */
++			pmd = (pmd_t *)__va(pgd_val(*pgd) & 0x7ffffff000UL);
++			pmd += (address >> 21) & 511;
++			do {
++				unsigned long pmd_next = pmd_addr_end(address, next);
++
++				if (pmd_trans_huge(*pmd))
++					__split_dmabuf_huge_pmd(vma, pmd, address,
++						false, NULL);
++				pmd++;
++				address = pmd_next;
++			} while (address != next);
++		}
++		pgd++;
++		address = next;
++	} while (address != end);
++}
++
++void split_dmabuf_huge_range(struct vm_area_struct *vma)
++{
++	__split_dmabuf_huge_range(vma);
++}
++
++/* Stock move reconstruction, NOT installed. ARM64 split PMD ptlocks.
++ * Stronger destination BUG than generic move_huge_pmd; no soft-dirty edit.
++ * Caller lock ordering/lifetime, architecture alternatives and flush behavior
++ * need differential/integration validation before any runtime use.
++ */
++bool move_dmabuf_huge_pmd(struct vm_area_struct *vma,
++		unsigned long old_address, unsigned long new_address,
++		pmd_t *old_pmd, pmd_t *new_pmd, bool need_rmap_locks)
++{
++	struct mm_struct *mm;
++	spinlock_t *old_ptl, *new_ptl;
++	bool moved = false, different_page;
++	pmd_t entry;
++
++	if (need_rmap_locks) {
++		if (vma->vm_file)
++			i_mmap_lock_write(vma->vm_file->f_mapping);
++		if (vma->anon_vma)
++			anon_vma_lock_write(vma->anon_vma);
++	}
++	BUG_ON(!pmd_none(*new_pmd));
++	mm = vma->vm_mm;
++	old_ptl = __pmd_dmabuf_huge_lock(old_pmd, vma);
++	if (!old_ptl)
++		goto out_rmap;
++	new_ptl = ptlock_ptr(pmd_ptdesc(new_pmd));
++	different_page = pmd_ptdesc(old_pmd) != pmd_ptdesc(new_pmd);
++	if (different_page)
++		spin_lock(new_ptl);
++	entry = pmdp_huge_get_and_clear(mm, old_address, old_pmd);
++	if (different_page) {
++		pgtable_t table = pgtable_trans_huge_withdraw(mm, old_pmd);
++
++		pgtable_trans_huge_deposit(mm, new_pmd, table);
++	}
++	set_pmd_at(mm, new_address, new_pmd, entry);
++	if (pmd_present(entry))
++		flush_tlb_range(vma, old_address, old_address + HPAGE_PMD_SIZE);
++	if (different_page)
++		spin_unlock(new_ptl);
++	spin_unlock(old_ptl);
++	moved = true;
++out_rmap:
++	if (need_rmap_locks) {
++		if (vma->anon_vma)
++			anon_vma_unlock_write(vma->anon_vma);
++		if (vma->vm_file)
++			i_mmap_unlock_write(vma->vm_file->f_mapping);
++	}
++	return moved;
++}
++
++/* Pinned ARM64 4K/VA39 remap reconstruction. NOT installed.
++ * map_type==0: deposited-table PMD path; every other value: PTE path.
++ * Failed allocation returns -ENOMEM without undoing prior successful maps.
++ * Alignment/ownership/caller unwind remain mandatory integration gates.
++ */
++int dmabuf_huge_remap_pfn_range(struct vm_area_struct *vma,
++		unsigned long address, unsigned long pfn, unsigned long size,
++		pgprot_t prot, unsigned int map_type)
++{
++	struct mm_struct *mm = vma->vm_mm;
++	unsigned long end = address + PAGE_ALIGN(size);
++	unsigned long physical_offset;
++	pgd_t *pgd;
++
++	BUG_ON(address & ~PAGE_MASK);
++	if (is_cow_mapping(vma->vm_flags)) {
++		if (address != vma->vm_start || end != vma->vm_end)
++			return -EINVAL;
++		vma->vm_pgoff = pfn;
++	}
++	vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
++	if (!map_type)
++		vm_flags_set(vma, 1UL << 39);
++	BUG_ON(address >= end);
++	physical_offset = (pfn - (address >> PAGE_SHIFT)) << PAGE_SHIFT;
++	pgd = pgd_offset(mm, address);
++	do {
++		unsigned long next = pgd_addr_end(address, end);
++		pmd_t *pmd;
++
++		if (!pgd)
++			return -ENOMEM;
++		/* pud folds into pgd in this exact three-level stock. */
++		if (pgd_none(*pgd) && __pmd_alloc(mm, (pud_t *)pgd, address))
++			return -ENOMEM;
++		pmd = (pmd_t *)__va(pgd_val(*pgd) & 0x7ffffff000UL);
++		pmd += (address >> 21) & 511;
++		if (!pmd)
++			return -ENOMEM;
++		do {
++			unsigned long pmd_next = pmd_addr_end(address, next);
++			spinlock_t *ptl;
++
++			if (!map_type) {
++				pgtable_t pgtable = pte_alloc_one(mm);
++
++				if (!pgtable)
++					return -ENOMEM;
++				ptl = pmd_lock(mm, pmd);
++				pgtable_trans_huge_deposit(mm, pmd, pgtable);
++				mm_inc_nr_ptes(mm);
++				/* Stock ignores pmd_set_huge return. No added alignment
++				 * guarantee: caller must prove 2MiB suitability.
++				 */
++				pmd_set_huge(pmd, (address + physical_offset) & PAGE_MASK,
++						prot);
++				spin_unlock(ptl);
++				atomic64_inc(&dmabuf_hugetlb_pmd_map);
++			} else {
++				pte_t *pte = pte_alloc_map_lock(mm, pmd, address, &ptl);
++				unsigned int count = (pmd_next - address) >> PAGE_SHIFT;
++				unsigned long value;
++
++				if (!pte)
++					return -ENOMEM;
++				BUG_ON(!pte_none(*pte));
++				value = (pgprot_val(prot) & 0xfeefffffffffffffUL) |
++					((address + physical_offset) & 0xfeeffffffffff000UL);
++				set_ptes(mm, address, pte, __pte(value | (1UL << 56)), count);
++				atomic64_inc(&dmabuf_hugetlb_contpte_map);
++				pte_unmap_unlock(pte, ptl);
++			}
++			pmd++;
++			address = pmd_next;
++		} while (address != next);
++		pgd++;
++		address = next;
++	} while (address != end);
++	return 0;
++}
++
++#endif
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -41,6 +41,7 @@
+ 
+ #include <linux/kernel_stat.h>
+ #include <linux/mm.h>
++#include <linux/xiaomi_dmabuf_huge.h>
+ #include <linux/mm_inline.h>
+ #include <linux/sched/mm.h>
+ #include <linux/sched/coredump.h>
+@@ -1361,6 +1362,9 @@
+ 
+ 	if (!vma_needs_copy(dst_vma, src_vma))
+ 		return 0;
++#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB
++	dmabuf_huge_fork_prepare(dst_vma, src_vma);
++#endif
+ 
+ 	if (is_vm_hugetlb_page(src_vma))
+ 		return copy_hugetlb_page_range(dst_mm, src_mm, dst_vma, src_vma);
+@@ -1712,6 +1716,14 @@
+ 	pmd = pmd_offset(pud, addr);
+ 	do {
+ 		next = pmd_addr_end(addr, end);
++#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB
++		if (vma->vm_flags & VM_XIAOMI_DMABUF_HUGE) {
++			if (dmabuf_huge_unmap_prepare(tlb, vma, pmd, addr, next)) {
++				addr = next;
++				continue;
++			}
++		} else
++#endif
+ 		if (is_swap_pmd(*pmd) || pmd_trans_huge(*pmd) || pmd_devmap(*pmd)) {
+ 			if (next - addr != HPAGE_PMD_SIZE)
+ 				__split_huge_pmd(vma, pmd, addr, false, NULL);
+--- a/mm/mmap.c
++++ b/mm/mmap.c
+@@ -13,6 +13,7 @@
+ #include <linux/slab.h>
+ #include <linux/backing-dev.h>
+ #include <linux/mm.h>
++#include <linux/xiaomi_dmabuf_huge.h>
+ #include <linux/mm_inline.h>
+ #include <linux/shm.h>
+ #include <linux/mman.h>
+@@ -664,7 +665,11 @@
+ 		goto nomem;
+ 
+ 	vma_prepare(&vp);
++#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB
++	dmabuf_huge_adjust_prepare(vma, start, end);
++#else
+ 	vma_adjust_trans_huge(vma, start, end, 0);
++#endif
+ 	vma->vm_start = start;
+ 	vma->vm_end = end;
+ 	vma->vm_pgoff = pgoff;
+@@ -707,7 +712,11 @@
+ 
+ 	init_vma_prep(&vp, vma);
+ 	vma_prepare(&vp);
++#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB
++	dmabuf_huge_adjust_prepare(vma, start, end);
++#else
+ 	vma_adjust_trans_huge(vma, start, end, 0);
++#endif
+ 
+ 	vma_iter_clear(vmi);
+ 	vma->vm_start = start;
+@@ -2427,7 +2436,11 @@
+ 	init_vma_prep(&vp, vma);
+ 	vp.insert = new;
+ 	vma_prepare(&vp);
++#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB
++	dmabuf_huge_adjust_prepare(vma, vma->vm_start, addr);
++#else
+ 	vma_adjust_trans_huge(vma, vma->vm_start, addr, 0);
++#endif
+ 
+ 	if (new_below) {
+ 		vma->vm_start = addr;
+--- a/mm/mremap.c
++++ b/mm/mremap.c
+@@ -9,6 +9,7 @@
+  */
+ 
+ #include <linux/mm.h>
++#include <linux/xiaomi_dmabuf_huge.h>
+ #include <linux/mm_inline.h>
+ #include <linux/hugetlb.h>
+ #include <linux/shm.h>
+@@ -557,6 +558,13 @@
+ 		if (!new_pmd)
+ 			break;
+ again:
++#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB
++		if (vma->vm_flags & VM_XIAOMI_DMABUF_HUGE) {
++			if (dmabuf_huge_move_prepare(vma, old_addr, new_addr,
++					old_pmd, new_pmd, extent, need_rmap_locks))
++				continue;
++		} else
++#endif
+ 		if (is_swap_pmd(*old_pmd) || pmd_trans_huge(*old_pmd) ||
+ 		    pmd_devmap(*old_pmd)) {
+ 			if (extent == HPAGE_PMD_SIZE &&
