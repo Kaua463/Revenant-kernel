@@ -320,6 +320,12 @@ Fixture split/close deixa de substituir __vm_area_free: executa seu corpo ARM64 
 
 Novo input obrigatório `--free-source` aponta essa referência, além de --close-source/Image/symbols. 1.152 split inputs, 4 boundary/3 CFI guards, 216 close/__vm_area_free sequências e 108 fput reais passaram; 432 chamadas ao slab modelado. Fonte preserva vma_lock_free antes de kmem_cache_free(VMA). anon_name não-NULL, slab allocator real, VM reachability, exit_mmap inteiro, MMU/SMP e backing buffer lifetime **não comprovados**. Recipes/produção não alteradas.
 
+### Preparação de produtor audit-only e cuidado no unwind
+
+Novo `tools/stock-recovery/runtime-audit/audit-map-contract.h`: preflight **novo**, não recipe Xiaomi, não ligado ao kernel/overlay. Restringe apenas futuro produtor de teste descartável a VA/PA 39-bit, start/end/phys/offset alinhados em 2MiB, buffer não vazio/alinhado, offset+length dentro da alocação sem overflow, shared mapping e destino declarado vazio pelo walker kernel. Não muda semântica stock nem prova empty tables/locks/ownership. `test-dmabuf-audit-map-contract.py` compilou C com -Wall/-Wextra/-Werror + ASan/UBSan: todos os seis rejection reasons e 30.240 combinações contra oráculo separado modulo/subtraction passaram (82 aceitas). Casos zero length, u64 wrap, fim da VA/PA, buffer/offset fora de range, private mapping e PMD não vazio cobertos.
+
+Inspeção do mmap.c ACK pinado revelou requisito importante de ownership: erro de mmap_file vai a unmap_and_free_file_vma, que faz **fput(file)→vm_file=NULL→unmap_region→vm_area_free**, sem vma_close naquele label. Não criar ref driver extra assumindo close automático no erro. O syscall ksys_mmap_pgoff para non-anonymous mantém fget(fd) até vm_mmap_pgoff retornar e só então fput; isso pode proteger alocação file-owned durante unwind, mas relação por source **não é teste runtime** e não se estende automaticamente a callers in-kernel/GPU. README do runtime audit registra requisitos e esse risco. Driver real, guest MMU/SMP, fault injection/unwind completo ainda por implementar/validar. Nenhum acesso ao device ou mudança de produção.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.
