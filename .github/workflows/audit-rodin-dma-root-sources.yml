@@ -10,6 +10,9 @@ on:
       - scripts/validate-dmabuf-susfs-overlay.py
       - scripts/test-dmabuf-root-integration-gates.py
       - scripts/validate-dmabuf-root-workflow.rb
+      - scripts/prepare-dmabuf-address-overlay.py
+      - tools/stock-recovery/dmabuf_huge_address.recovered.c
+      - tools/stock-recovery/overlays/dma-6.6.77/**
 
 permissions:
   contents: read

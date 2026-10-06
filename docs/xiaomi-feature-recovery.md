@@ -972,6 +972,103 @@ Rotas ELF específicas ≠ todas branches alcançáveis/runtime. GPU MMU e CPU V
 distintos. Não inserir roteamento artificial nesses callbacks e chamá-lo stock.
 Investigar exportadores/lookup indireto restantes; full activation segue aberto.
 
+### Checkpoint — segurança mapper/move e cobertura real pré-fork
+
+Canônico atual: `outputs/stock-dmabuf-overlay-20261006-v9`; composição sete
+arquivos: `outputs/stock-dmabuf-combined-20261006-v2`. Receitas stock continuam
+hash-pinadas/imutáveis. Seis `safety_deviations` explícitos no gerador/manifest;
+nenhuma alteração de ABI, export, assinatura ou módulos stock.
+
+Integração agora rejeita ranges VMA/PFN/overflow inválidos e PMD sem alinhamento
+2MiB antes de efeitos; destinos PMD/PTE ocupados não são sobrescritos. Falha de
+`pmd_set_huge` retira/libera apenas tabela recém-depositada, desfaz accounting.
+Mapas publicados antes de falha permanecem responsabilidade do unwind caller.
+Move ocupado retorna false, libera rmap locks e preserva origem; caller usa
+split/PTE fallback. Generic `__split_huge_pmd` com bit39 usa split DMA, não
+teardown genérico de arquivo; ordinary/disabled path preservado.
+
+ASan/UBSan: entradas inválidas, 512 posições PTE ocupadas, falha publicação
+primeiro/segundo PMD, zap de publicação anterior; 24 moves válidos mantêm trace
+stock, 24 destinos ocupados recusados; generic dispatch oito casos/profile.
+Esses testes executam corpos adaptados, mas allocator/locks/MMU modelados.
+Teste source-only de mapper no futuro runner usa helpers ACK hash-pinados;
+modalidade Image local também valida identidade stock e offsets BTF.
+
+Lacuna de teste corrigida: fork limpa bit39 antes de antigos mremap/mprotect.
+Guest agora testa move4MiB/proteção total/parcial/MADV_DONTNEED recusado antes
+de fork, após fechar fd, com leitura concorrente por alias. Dez misc buffers
+mais dois exports. Após restore, dados do mapping movido verificados em todas
+CPUs disponíveis (mínimo duas), ainda antes de fork; afinidade original
+restaurada. Teste nativo modela afinidade, não comprova SMP/MMU. Dados
+verificados novamente após escrita compartilhada do
+filho. Teste nativo executa helper/reader reais, syscalls modelados; não VM.
+
+Instrumentação guardada e restrita a VM descartável emite
+`DMA_AUDIT_HUGE_MOVE` e `DMA_AUDIT_HUGE_SPLIT` somente após sucesso real dos
+helpers. Runner exige dois moves/um split no trecho pré-fork PMD, zero no PTE;
+rejeita logs faltantes/malformados/duplicados, fora de ordem ou fora de único
+lifetime PMD possuído. Splits legítimos pós-fork permanecem permitidos.
+18 testes parser e três trace gates passam; não houve QEMU novo nesta etapa.
+Logs VM históricos não satisfazem novas exigências; não relabelar como prova.
+
+Composição root: pin agregado `3b48c383...` pertencia ao overlay antigo; não
+representa código atual. Gate agora deriva expectativa independente de
+snapshot root pré-write, ainda exigindo 26 arquivos/manifest `ceb50cf6...`,
+mais postimages DMA reconstruídos e validados de ACK/receitas/SUSFS pinados.
+Conjunto tracked final exato + hashes agregados continuam obrigatórios;
+expected nunca deriva da árvore final mutada; pin agregado novo também exigido.
+Oito unit gates passam;
+integração KSUN completa nova ainda requer runner, não inferida de mocks.
+
+Bateria local: cinco generator + seis validator + três combined round-trip;
+quatro folded, sete runtime integration, 13 producer, seis exporter, root
+fragment/config e composição real das fontes MM do SUSFS passam. Caminho
+disabled preserva os quatro arquivos MM byte a byte. Uma quebra só de newline
+gerada foi corrigida no gerador; teste não afrouxado. `git diff --check` aplica
+às fontes/documentos; patch gerado contém prefixo obrigatório de contexto
+` ` antes de tabs/linhas vazias, validado por canonical hash/round-trip.
+
+Stock ARM64 reexecutado: wrappers3000, zap1000, split200, range500, move768,
+fork64, unmap560, move-caller480, VMA48, PMD216, PTE360, selector4050,
+RCU16/7134 liberações, fput280, split-VMA1152. Oito variantes encadeadas PMD
+passam, incluindo cross-move→split→SPECIAL unmap→free_pgd_range→RCU173 tabelas;
+7200 deposit/withdraw e 3000 pmd_set_huge também passam. Efeitos MMU/TLB/SMP,
+allocator/grace period continuam modelados; não constituem hardware proof.
+
+Backprop pendente de aprovação SPEC: falhas de ranges/destino/publicação e
+cobertura pré-fork devem exigir rejeição sem corrupção, unwind de publicações
+anteriores, desvio declarado e prova runtime do caminho especial. T20 segue
+`~`; Kbuild/KMI/VM atual, ativação exporter stock e hardware não concluídos.
+Workflow apenas editado localmente para reter novos testes; sem push/dispatch.
+
+`extract-dmabuf-stock-callers.py` torna sweep reproduzível: pin Image/símbolos,
+17.235.968 bytes text +405.524 inittext, decoder B/BL com sign extension,
+intervalos disjuntos e contexto de símbolos vizinhos. Três testes negativos/
+boundaries passam. Relatório `outputs/stock-dmabuf-callers-20261006-v1.json`:
+15 candidatos aos dez helpers, incluindo hooks em copy/unmap/move/expand/
+shrink/split-VMA. Mapper especial tem zero branches diretas nesse sweep;
+isso não prova feature inativa, nem cobre chamada indireta/módulos/lookup.
+Inputs permanecem hash-pinados e verificados novamente antes de salvar.
+
+Composição kernel-side independente: 36 arquivos públicos ACK f7ebe obtidos
+com Git blob/SHA256, fontes root no total 1.990.193 bytes (~1,9MiB), mais core
+DMA-BUF já pinado (sem árvore/build completo).
+`test-dmabuf-root-snapshot.py` aplica patch SUSFS exato em fixture descartável,
+exige apenas três rejects auditados e executa fragmento de adaptação pinado.
+Root26 valida `ceb50cf6...`; MM+core DMA31 valida expectativa independente e pin
+`73db391ccb9ab268e92854ff218df4ee311595596c6250d6a922cb8065b313b6`.
+Mutação extra em fs/open.c detectada; fontes SUSFS copiadas byte-identical.
+Teste passou com código real, não hashes mock. Não executa patches KSU nem
+compila: integração completa KSUN/Kbuild/KMI/runtime continua pendente.
+
+Lacuna integração encerrada nas fontes: core selector antes presente apenas
+em VM/patch combinado agora integra driver root→MM→core. Core preflight pinado
+ocorre antes de writes root, pós-root preimage exato antes de aplicar, postimage
+conferido, repeat recusado sem mudar árvore. Sem bypass ou nova interface
+exportada; CRC/KMI e evidência de compilação nova permanecem obrigatórios. Workflow root-build
+passa a exigir provider/pointer real em `dma_buf_fops`, além dos dez helpers e
+quatro counters; gate Ruby tem sexto negativo para callback ausente.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

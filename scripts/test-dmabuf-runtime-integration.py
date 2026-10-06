@@ -48,6 +48,9 @@ class Integration(unittest.TestCase):
                          'if (recovered_dma_audit_fail_alloc(mm, map_type))'), 2)
         self.assertEqual((self.source / 'mm/huge_memory.c').read_text().count(
                          'if (recovered_dma_audit_fail_pmd_table(mm, map_type))'), 1)
+        for event in ('DMA_AUDIT_HUGE_MOVE', 'DMA_AUDIT_HUGE_SPLIT'):
+            self.assertEqual((self.source / 'mm/huge_memory.c').read_text().count(event), 1)
+            self.assertNotIn(event, huge_before.decode())
         with self.assertRaises(ValueError):
             module.run(self.args)
 

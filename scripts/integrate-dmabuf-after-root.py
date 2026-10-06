@@ -15,8 +15,9 @@ import subprocess
 import tempfile
 
 composition = SourceFileLoader('dma_root_composition', str(Path(__file__).with_name('validate-dmabuf-susfs-overlay.py'))).load_module()
+address = SourceFileLoader('dma_root_address', str(Path(__file__).with_name('prepare-dmabuf-address-overlay.py'))).load_module()
 ROOT_MANIFEST = 'ceb50cf610affc7a7a671fb07568e5ec033e9d63ad12b7de1a51994f6c935fd2'
-COMPOSED_MANIFEST = '3b48c383849fa925e3b1a41dd013d668f8f1a4c0e3c179d9f8638a3b94e9c9c9'
+COMPOSED_MANIFEST = '73db391ccb9ab268e92854ff218df4ee311595596c6250d6a922cb8065b313b6'
 KSU_PIN = '234f6e040fcbca18b16d2398e1aa225712ec99ad'
 KSU_V330 = '3b18216f71df189ab3d1b1ce0bdb21be1268e771'
 KSU_UAPI = 'fc98ae0140c80815260ecaf86ddb6ef06ad29863'
@@ -49,6 +50,36 @@ def ordered_manifest(source, names):
     return digest.hexdigest()
 
 
+def expected_composed_manifest(root_hashes, report):
+    """Independent pre-write root snapshot + canonical DMA expected postimages.
+
+    Never derive expectations from the already-mutated build tree. The root
+    snapshot must still match ROOT_MANIFEST; composition validates every DMA
+    postimage against pinned ACK/recipes and the exact SUSFS memory delta.
+    Newly copied headers remain separately validated, not silently tracked.
+    """
+    def digest_hashes(records):
+        digest = hashlib.sha256()
+        for name, sha in sorted(records.items()):
+            if name.startswith('/') or '..' in Path(name).parts:
+                raise ValueError('unsafe expected manifest path')
+            if len(sha) != 64 or any(c not in '0123456789abcdef' for c in sha):
+                raise ValueError('invalid expected source digest')
+            digest.update(name.encode() + b'\0' + bytes.fromhex(sha))
+        return digest.hexdigest()
+
+    if len(root_hashes) != 26 or digest_hashes(root_hashes) != ROOT_MANIFEST:
+        raise ValueError('root snapshot drift before composition')
+    expected = dict(root_hashes)
+    for name, before in report['before'].items():
+        after = report['after'][name]
+        if before != after:
+            if name in root_hashes and root_hashes[name] != before:
+                raise ValueError('root/DMA preimage disagreement: ' + name)
+            expected[name] = after
+    return digest_hashes(expected)
+
+
 def root_gate(source):
     names = changed(source)
     if len(names) != 26 or ordered_manifest(source, names) != ROOT_MANIFEST:
@@ -68,6 +99,20 @@ def ksu_compatibility_gate(source):
     git(source, 'merge-base', '--is-ancestor', KSU_V330, KSU_PIN)
     if b'const val MINIMAL_SUPPORTED_KERNEL = 33188' not in git(source, 'show', KSU_PIN + ':' + NATIVES_PATH):
         raise ValueError('KernelSU manager minimum mismatch')
+
+
+def compose_core(source, prepared, report):
+    """Apply independently prepared, pinned core callback after MM/root gates."""
+    record=json.loads((prepared/'manifest.json').read_text())['changes'][address.PATH]
+    if composition.digest(composition.payload(source,address.PATH))!=record['before']:
+        raise ValueError('post-root DMA core preimage drift')
+    patch=prepared/'dmabuf-address-review.patch'
+    composition.apply(source,patch,check=True)
+    composition.apply(source,patch)
+    if composition.digest(composition.payload(source,address.PATH))!=record['after']:
+        raise ValueError('composed DMA core postimage drift')
+    report['before'][address.PATH]=record['before']
+    report['after'][address.PATH]=record['after']
 
 
 def run(args):
@@ -90,15 +135,22 @@ def run(args):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
         composition.validator.run(argparse.Namespace(source=reference, overlay=args.overlay, apply_review=False))
+        # Default-off core callback is part of the same reviewed feature,
+        # not merely the disposable exporter test. Preflight before root writes.
+        prepared_core=Path(temporary)/'core-overlay'
+        address.run(argparse.Namespace(core=args.source/address.PATH,output=prepared_core))
         environment = dict(os.environ)
         environment.update(KERNEL_DIR=str(args.source.resolve()), KSU_DIR=str(args.ksu_source.resolve()),
                            SUSFS_DIR=str(args.susfs_source.resolve()), FIX_DIR=str(args.fix_source.resolve()))
         integrator = Path(__file__).with_name('integrate-ksun-susfs-6.6.77.sh')
         subprocess.run(['bash', str(integrator.resolve())], env=environment, check=True)
         root_names = root_gate(args.source)
+        root_hashes = {name: composition.digest(composition.payload(args.source, name))
+                       for name in root_names}
         print('PASS: original root integration and independent ordered manifest; composing DMA', flush=True)
         report = composition.run(argparse.Namespace(source=args.source, ack_reference=reference, overlay=args.overlay,
                                                    susfs_source=args.susfs_source, apply_review=True, output=None))
+        compose_core(args.source,prepared_core,report)
         # Unchanged DMA inputs do not belong in the tracked delta.
         expected = set(root_names) | {name for name in report['before'] if report['before'][name] != report['after'][name]}
         actual = changed(args.source)
@@ -108,7 +160,8 @@ def run(args):
             if composition.digest(composition.payload(args.source, name)) != sha:
                 raise ValueError('DMA altered copied SUSFS source')
         composed_sha = ordered_manifest(args.source, actual)
-        if composed_sha != COMPOSED_MANIFEST:
+        expected_sha = expected_composed_manifest(root_hashes, report)
+        if composed_sha != expected_sha or composed_sha != COMPOSED_MANIFEST:
             raise ValueError('composed ordered manifest drift')
         report.update(root_manifest_sha256=ROOT_MANIFEST,
                       composed_tracked_manifest_sha256=composed_sha,

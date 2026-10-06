@@ -53,7 +53,9 @@ class Overlay(unittest.TestCase):
     def test_exact_recipes_and_build_gate(self):
         text=self.result['mm/huge_memory.c']
         for name in ('zap','split','wrappers','range','move','remap'):
-            recipe=mod.integration_wrappers(self.recipes[name]) if name=='wrappers' else self.recipes[name]
+            recipe=(mod.integration_wrappers(self.recipes[name]) if name=='wrappers' else
+                    mod.integration_remap(self.recipes[name]) if name=='remap' else
+                    mod.integration_move(self.recipes[name]) if name=='move' else self.recipes[name])
             self.assertIn(recipe,text)
         self.assertIn('CONFIG_PGTABLE_LEVELS != 3 || !USE_SPLIT_PMD_PTLOCKS',text)
         self.assertIn('\tdefault n\n',self.result['mm/Kconfig'])

@@ -116,12 +116,28 @@
  #include <linux/sched.h>
  #include <linux/sched/mm.h>
  #include <linux/sched/coredump.h>
-@@ -3994,3 +3995,337 @@
+@@ -2782,6 +2783,13 @@
+ {
+ 	spinlock_t *ptl;
+ 	struct mmu_notifier_range range;
++#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB
++	/* Integration safety: generic file-backed split tears down PFN mappings. */
++	if (vma->vm_flags & VM_XIAOMI_DMABUF_HUGE) {
++		__split_dmabuf_huge_pmd(vma, pmd, address, freeze, folio);
++		return;
++	}
++#endif
+ 
+ 	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, vma->vm_mm,
+ 				address & HPAGE_PMD_MASK,
+@@ -3994,3 +4002,373 @@
  	trace_remove_migration_pmd(address, pmd_val(pmde));
  }
  #endif
 +
 +#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB
++#include <linux/limits.h>
++#include <asm/memory.h>
 +#if CONFIG_PGTABLE_LEVELS != 3 || !USE_SPLIT_PMD_PTLOCKS
 +#error "Recovered DMA requires 3 page-table levels and split PMD locks"
 +#endif
@@ -337,7 +353,9 @@
 +		if (vma->anon_vma)
 +			anon_vma_lock_write(vma->anon_vma);
 +	}
-+	BUG_ON(!pmd_none(*new_pmd));
++	/* Integration safety: keep old mapping intact; let caller fall back. */
++	if (!pmd_none(*new_pmd))
++		goto out_rmap;
 +	mm = vma->vm_mm;
 +	old_ptl = __pmd_dmabuf_huge_lock(old_pmd, vma);
 +	if (!old_ptl)
@@ -378,12 +396,27 @@
 +		unsigned long address, unsigned long pfn, unsigned long size,
 +		pgprot_t prot, unsigned int map_type)
 +{
-+	struct mm_struct *mm = vma->vm_mm;
-+	unsigned long end = address + PAGE_ALIGN(size);
++	struct mm_struct *mm;
++	unsigned long end, rounded;
 +	unsigned long physical_offset;
 +	pgd_t *pgd;
 +
-+	BUG_ON(address & ~PAGE_MASK);
++	/* Integration-only validation: caller still owns PFNs and mmap write lock.
++	 * Reject invalid ranges before flags, pgoff, allocations or publication.
++	 */
++	if (!vma || !vma->vm_mm || !size || size > ULONG_MAX - (PAGE_SIZE - 1) ||
++	    (address & ~PAGE_MASK))
++		return -EINVAL;
++	rounded = PAGE_ALIGN(size);
++	if (address < vma->vm_start || address >= vma->vm_end ||
++	    rounded > vma->vm_end - address || pfn > (PHYS_MASK >> PAGE_SHIFT) ||
++	    ((rounded >> PAGE_SHIFT) - 1) > (PHYS_MASK >> PAGE_SHIFT) - pfn)
++		return -EINVAL;
++	if (!map_type && ((address | rounded) & (HPAGE_PMD_SIZE - 1) ||
++			 (pfn & ((HPAGE_PMD_SIZE >> PAGE_SHIFT) - 1))))
++		return -EINVAL;
++	mm = vma->vm_mm;
++	end = address + rounded;
 +	if (is_cow_mapping(vma->vm_flags)) {
 +		if (address != vma->vm_start || end != vma->vm_end)
 +			return -EINVAL;
@@ -421,13 +454,24 @@
 +				if (!pgtable)
 +					return -ENOMEM;
 +				ptl = pmd_lock(mm, pmd);
++				if (!pmd_none(*pmd)) {
++					spin_unlock(ptl);
++					pte_free(mm, pgtable);
++					return -EBUSY;
++				}
 +				pgtable_trans_huge_deposit(mm, pmd, pgtable);
 +				mm_inc_nr_ptes(mm);
 +				/* Stock ignores pmd_set_huge return. No added alignment
 +				 * guarantee: caller must prove 2MiB suitability.
 +				 */
-+				pmd_set_huge(pmd, (address + physical_offset) & PAGE_MASK,
-+						prot);
++				if (!pmd_set_huge(pmd, (address + physical_offset) & PAGE_MASK,
++						prot)) {
++					pgtable = pgtable_trans_huge_withdraw(mm, pmd);
++					mm_dec_nr_ptes(mm);
++					spin_unlock(ptl);
++					pte_free(mm, pgtable);
++					return -EINVAL;
++				}
 +				spin_unlock(ptl);
 +				atomic64_inc(&dmabuf_hugetlb_pmd_map);
 +			} else {
@@ -437,7 +481,13 @@
 +
 +				if (!pte)
 +					return -ENOMEM;
-+				BUG_ON(!pte_none(*pte));
++				/* Check every entry before bulk set_ptes, not only the first. */
++				for (unsigned int i = 0; i < count; i++) {
++					if (!pte_none(pte[i])) {
++						pte_unmap_unlock(pte, ptl);
++						return -EBUSY;
++					}
++				}
 +				value = (pgprot_val(prot) & 0xfeefffffffffffffUL) |
 +					((address + physical_offset) & 0xfeeffffffffff000UL);
 +				set_ptes(mm, address, pte, __pte(value | (1UL << 56)), count);

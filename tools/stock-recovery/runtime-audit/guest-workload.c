@@ -79,6 +79,7 @@ static void reject(int fd, size_t length, int protection, int flags, off_t offse
 
 struct reader {
 	const void *alias;
+	size_t bytes;
 	atomic_int stop;
 	atomic_ulong passes;
 };
@@ -87,10 +88,58 @@ static void *read_alias(void *argument)
 {
 	struct reader *reader = argument;
 	while (!atomic_load_explicit(&reader->stop, memory_order_acquire)) {
-		verify(reader->alias, 0, BYTES);
+		verify(reader->alias, 0, reader->bytes);
 		atomic_fetch_add_explicit(&reader->passes, 1, memory_order_relaxed);
 	}
 	return NULL;
+}
+
+static void migrate_and_verify(const void *alias);
+
+static void verify_prefork_lifecycle(void **first, const void *alias,
+		size_t alias_bytes, const char *label)
+{
+	struct reader reader = {.alias = alias, .bytes = alias_bytes};
+	pthread_t thread;
+	void *target, *moved;
+	unsigned long baseline;
+
+	atomic_init(&reader.stop, 0);
+	atomic_init(&reader.passes, 0);
+	if (pthread_create(&thread, NULL, read_alias, &reader))
+		fail("pre-fork reader create");
+	while (!atomic_load_explicit(&reader.passes, memory_order_relaxed))
+		sched_yield();
+	/* BEFORE fork clears bit39: exercise the original huge-PMD move first.
+	 * Then full and partial protections exercise retained/split mappings.
+	 * The separate alias stays readable while the moved VMA is PROT_NONE.
+	 */
+	target = reservation(BYTES);
+	moved = mremap(*first, BYTES, BYTES, MREMAP_MAYMOVE | MREMAP_FIXED, target);
+	if (moved != target)
+		fail("pre-fork huge mapping move");
+	*first = moved;
+	verify(moved, 0, BYTES);
+	if (mprotect(moved, BYTES, PROT_NONE) ||
+	    mprotect(moved, BYTES, PROT_READ | PROT_WRITE) ||
+	    mprotect((char *)moved + BLOCK, 4096, PROT_NONE) ||
+	    mprotect((char *)moved + BLOCK, 4096, PROT_READ | PROT_WRITE))
+		fail("pre-fork full/partial protect restore");
+	verify(moved, 0, BYTES);
+	verify(alias, 0, alias_bytes);
+	/* PFNMAP must reject discard rather than lose non-faultable backing. */
+	errno = 0;
+	if (!madvise(moved, BYTES, MADV_DONTNEED) || errno != EINVAL)
+		fail("pre-fork PFNMAP discard guard");
+	verify(moved, 0, BYTES);
+	migrate_and_verify(moved);
+	baseline = atomic_load_explicit(&reader.passes, memory_order_relaxed);
+	while (atomic_load_explicit(&reader.passes, memory_order_relaxed) <= baseline)
+		sched_yield();
+	atomic_store_explicit(&reader.stop, 1, memory_order_release);
+	if (pthread_join(thread, NULL))
+		fail("pre-fork reader join");
+	printf("DMA_GUEST_PRE_FORK: %s move=1 protect=1 read_concurrent=1 cpu_migrate=1 data_verified=1\n", label);
 }
 
 static void migrate_and_verify(const void *alias)
@@ -204,6 +253,7 @@ static void exercise(const char *device, int inject)
 	verify_cross_pgd(fd, device);
 	if (close(fd))
 		fail("close mapped file");
+	verify_prefork_lifecycle(&first, alias, BYTES, device);
 	/* No descriptor remains: VMA file references must retain backing. */
 	child = fork();
 	if (child < 0)
@@ -223,7 +273,9 @@ static void exercise(const char *device, int inject)
 		fail("shared fork write visibility");
 	((volatile uint64_t *)first)[0] ^= 5;
 	verify(first, 0, BYTES);
+	printf("DMA_GUEST_FORK_PASS: %s shared_write=1 data_verified=1\n", device);
 	reader.alias = alias;
+	reader.bytes = BYTES;
 	atomic_init(&reader.stop, 0);
 	atomic_init(&reader.passes, 0);
 	if (pthread_create(&thread, NULL, read_alias, &reader))
@@ -268,6 +320,7 @@ static void exercise_export(unsigned int mode)
 	int factory, fd, fd_flags, status;
 	pid_t child;
 	unsigned int attempt;
+	char label[32];
 
 	factory = open("/dev/recovered-dma-export-audit", O_RDWR | O_CLOEXEC);
 	if (factory < 0 || ioctl(factory, DMA_AUDIT_EXPORT_LIVE, 0) != 0)
@@ -309,6 +362,9 @@ static void exercise_export(unsigned int mode)
 		verify(mappings[index], 0, lengths[index]);
 	if (close(fd) || ioctl(factory, DMA_AUDIT_EXPORT_LIVE, 0) != 1)
 		fail("DMA-BUF backing lost after close fd");
+	if (snprintf(label, sizeof(label), "export-mode-%u", mode) < 0)
+		fail("export label");
+	verify_prefork_lifecycle(&mappings[3], mappings[2], BLOCK, label);
 	errno = 0;
 	if (!mprotect(mappings[3], BYTES, PROT_READ | PROT_EXEC) || errno != EACCES)
 		fail("export MAYEXEC guard");
@@ -327,6 +383,8 @@ static void exercise_export(unsigned int mode)
 	if (((volatile uint64_t *)mappings[3])[0] != (audit_word(0, SEED) ^ 9))
 		fail("export fork shared write");
 	((volatile uint64_t *)mappings[3])[0] ^= 9;
+	verify(mappings[3], 0, BYTES);
+	printf("DMA_EXPORT_FORK_PASS mode=%u shared_write=1 data_verified=1\n", mode);
 	target = reservation(BYTES);
 	moved = mremap(mappings[3], BYTES, BYTES, MREMAP_MAYMOVE | MREMAP_FIXED, target);
 	if (moved != target)

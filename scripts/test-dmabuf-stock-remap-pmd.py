@@ -248,6 +248,11 @@ def real_helper_fixture(image_path,kernel):
         found=fields(kernel.btf,ident)
         for member,offset in required.items():assert found[member]==offset
     helper_dir=image_path.parent.parent/'stock-ack-dmabuf-helpers-reference-20261005'
+    return pinned_helper_fixture(helper_dir)
+
+
+def pinned_helper_fixture(helper_dir):
+    """Native helper bodies only; does not verify Image or BTF layouts."""
     deposit_source=helper_dir/'mm/pgtable-generic.c';pmd_source=helper_dir/'arch/arm64/mm/mmu.c'
     assert hashlib.sha256(deposit_source.read_bytes()).hexdigest()=='990748e9f12d796834dbe92a194454cbe2620d2664e5982ac2da0d35d2610935'
     assert hashlib.sha256(pmd_source.read_bytes()).hexdigest()=='5faec6be3b00796e2a4693d0892fe6b2684c34712eeeb7ca0b5d1a8e1707d89b'

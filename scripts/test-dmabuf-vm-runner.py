@@ -31,6 +31,9 @@ def mock_pass():
                           f'DMA_AUDIT_UNWIND id={identity} mode={mode} before=12288 partial={partial} retry=12288',
                           f'DMA_GUEST_ENOMEM_PASS: /dev/recovered-dma-audit-{device} same_address_retry=1'))
         lines.extend((f'DMA_GUEST_CROSS_PGD: /dev/recovered-dma-audit-{device} bytes=4194304 root_slots=2 data_verified=1',
+                      *((['DMA_AUDIT_HUGE_MOVE','DMA_AUDIT_HUGE_MOVE','DMA_AUDIT_HUGE_SPLIT']) if mode==0 else []),
+                      f'DMA_GUEST_PRE_FORK: /dev/recovered-dma-audit-{device} move=1 protect=1 read_concurrent=1 cpu_migrate=1 data_verified=1',
+                      f'DMA_GUEST_FORK_PASS: /dev/recovered-dma-audit-{device} shared_write=1 data_verified=1',
                       f'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-{device}',
                       f'DMA_AUDIT_RELEASE id={identity} mode={mode}',
                       f'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-{device} reader_passes=1'))
@@ -41,7 +44,10 @@ def mock_pass():
                                       (2097152,2097151,1,1),(4194304,2097151,1,0)):
             lines.append(f'DMA_EXPORT_MMAP id={identity} mode={mode} bytes={length} offset=0 huge={huge} result=0')
             lines.append(f'DMA_EXPORT_ALIGN mode={mode} bytes={length} mask={mask} aligned=1 hint_checked={hint}')
-        lines.extend((f'DMA_EXPORT_LAST_UNMAP mode={mode}',
+        lines.extend((*((['DMA_AUDIT_HUGE_MOVE','DMA_AUDIT_HUGE_MOVE','DMA_AUDIT_HUGE_SPLIT']) if mode==0 else []),
+                      f'DMA_GUEST_PRE_FORK: export-mode-{mode} move=1 protect=1 read_concurrent=1 cpu_migrate=1 data_verified=1',
+                      f'DMA_EXPORT_FORK_PASS mode={mode} shared_write=1 data_verified=1',
+                      f'DMA_EXPORT_LAST_UNMAP mode={mode}',
                       f'DMA_EXPORT_RELEASE id={identity} mode={mode}',
                       f'DMA_EXPORT_CASE_PASS mode={mode} live=0'))
     return '\n'.join(lines + ['DMA_GUEST_PASS: basic tests', 'DMA_VM_RESULT_PASS: finished'])
@@ -51,6 +57,45 @@ PASS = mock_pass()
 
 
 class Runner(unittest.TestCase):
+    def test_all_huge_events_require_unique_owned_pmd_lifetime(self):
+        event = 'DMA_AUDIT_HUGE_SPLIT\n'
+        for changed in (event+PASS, PASS+'\n'+event,
+                        PASS+'\nDMA_AUDIT_HUGE_UNKNOWN\n',
+                        PASS.replace('DMA_AUDIT_RELEASE id=2 mode=1',
+                                     event+'DMA_AUDIT_RELEASE id=2 mode=1'),
+                        PASS.replace('DMA_EXPORT_RELEASE id=2 mode=1',
+                                     event+'DMA_EXPORT_RELEASE id=2 mode=1')):
+            with self.subTest(changed=changed[-90:]),self.assertRaises(ValueError):
+                module.check_log(changed)
+        # Fork legitimately splits another PMD after the pre-fork marker.
+        module.check_log(PASS.replace('DMA_GUEST_FORK_PASS: /dev/recovered-dma-audit-pmd',
+                                     event+'DMA_GUEST_FORK_PASS: /dev/recovered-dma-audit-pmd'))
+
+    def test_actual_huge_move_and_split_trace_required_before_prefork_marker(self):
+        for event in ('DMA_AUDIT_HUGE_MOVE','DMA_AUDIT_HUGE_SPLIT'):
+            for replace in ('',event+' invalid',event+'\n'+event):
+                with self.subTest(event=event,replace=replace),self.assertRaises(ValueError):
+                    module.check_log(PASS.replace(event,replace,1))
+        pte='DMA_GUEST_PRE_FORK: /dev/recovered-dma-audit-pte'
+        with self.assertRaises(ValueError):
+            module.check_log(PASS.replace(pte,'DMA_AUDIT_HUGE_MOVE\n'+pte))
+        # A guest marker alone must not pass a PMD workload run as ordinary PTE.
+        with self.assertRaises(ValueError):
+            module.check_log(PASS.replace('DMA_AUDIT_HUGE_MOVE\n','').replace('DMA_AUDIT_HUGE_SPLIT\n',''))
+
+    def test_prefork_checks_cannot_be_missing_duplicated_or_run_after_fork(self):
+        for label, fork in (('/dev/recovered-dma-audit-pmd',
+                             'DMA_GUEST_FORK_PASS: /dev/recovered-dma-audit-pmd shared_write=1 data_verified=1'),
+                            ('export-mode-0','DMA_EXPORT_FORK_PASS mode=0 shared_write=1 data_verified=1')):
+            before = f'DMA_GUEST_PRE_FORK: {label} move=1 protect=1 read_concurrent=1 cpu_migrate=1 data_verified=1'
+            for changed in ('',before+'\n'+before,before.replace('data_verified=1','data_verified=0'),
+                            before.replace('read_concurrent=1','read_concurrent=0'),
+                            before.replace('cpu_migrate=1','cpu_migrate=0')):
+                with self.subTest(label=label,changed=changed), self.assertRaises(ValueError):
+                    module.check_log(PASS.replace(before,changed))
+            with self.assertRaises(ValueError):
+                module.check_log(PASS.replace(before+'\n'+fork,fork+'\n'+before))
+
     def test_second_pgd_failure_requires_one_owned_block_and_exact_two_table_pages(self):
         event = 'DMA_AUDIT_TABLE_FAULT id=9 mode=0 ordinal=2 published=1 table=1 cold=1'
         for before,after in (('ordinal=2','ordinal=1'),('published=1','published=0'),

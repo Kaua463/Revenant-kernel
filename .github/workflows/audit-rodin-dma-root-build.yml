@@ -9,6 +9,11 @@ on:
       - scripts/prepare-dmabuf-root-fragment.py
       - scripts/test-dmabuf-root-fragment.py
       - scripts/validate-dmabuf-root-build.rb
+      - scripts/integrate-dmabuf-after-root.py
+      - scripts/prepare-dmabuf-address-overlay.py
+      - scripts/check-dmabuf-address-build.py
+      - tools/stock-recovery/overlays/dma-6.6.77/**
+      - tools/stock-recovery/dmabuf_huge_address.recovered.c
 
 permissions:
   contents: read
@@ -56,6 +61,8 @@ jobs:
           python3 scripts/test-dmabuf-root-fragment.py
           python3 scripts/test-dmabuf-root-integration-gates.py
           python3 scripts/test-dmabuf-build-gates.py
+          python3 scripts/test-dmabuf-address-overlay.py
+          python3 scripts/test-dmabuf-address-build.py
       - name: Install build dependencies
         run: |
           set -euo pipefail
@@ -142,6 +149,8 @@ jobs:
           image=$(<dma-root-build-evidence/image-path)
           python3 scripts/check-dmabuf-build.py --vmlinux "$vmlinux" \
             --config dma-root-build-evidence/config --enabled y --output dma-root-build-evidence/providers.json
+          python3 scripts/check-dmabuf-address-build.py --vmlinux "$vmlinux" \
+            --output dma-root-build-evidence/address-registration.json
           python3 scripts/check-stock-kfence.py dma-root-build-evidence/config
           python3 scripts/check-stock-config-alignment.py dma-root-build-evidence/config
           python3 scripts/rom-module-reference.py check --symvers dma-root-build-evidence/Module.symvers \

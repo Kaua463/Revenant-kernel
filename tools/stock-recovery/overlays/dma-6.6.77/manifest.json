@@ -2,7 +2,7 @@
   "status": "REVIEW_ONLY_NOT_INSTALLABLE",
   "ack_commit": "f7ebe251035c0d15ff90c6a0a320697932785fad",
   "image_sha256": "99485b0132e3aa28f4e965119591c8149fe3c20e7e0fd10d753ef014a582472e",
-  "patch_sha256": "7b510e54706678ec730cff0fc908c4d4ceb33c0b2f95b497deacdfdf2bc11045",
+  "patch_sha256": "fa59a3045292a86ba475e87d1c191e59e5387506f4f617db6b12ba96d881ea4a",
   "sources": {
     "mm/mmap.c": "1e554a480b57fed37600bc36ff3cab66c164af29934ff88362e1ed4bb6e73e5e",
     "mm/mremap.c": "0613e0605fd73f89fe2b8040e64f8293a8619b64d84a33cbb321f8dfc113ab7b",
@@ -39,7 +39,7 @@
     },
     "mm/huge_memory.c": {
       "before": "21500d58bf839040cd8caaa053f1004983f3d8cdbb64503ddbd54bd6b0cedf3a",
-      "after": "a0ae5c8386ee90f0e6afe15752d7a1be0d80093524fc820461d0f5dddff8199e"
+      "after": "165094c7b872d6436c7f26f93163811f53db52d53b677f605f6520c7bcfead8f"
     },
     "mm/memory.c": {
       "before": "7cd250cb365f15977d74bb9283f9c0a8399c3c8dcd281b54aaeb1a987ce894cb",
@@ -62,10 +62,14 @@
     "MMU/SMP/lifetime/hardware"
   ],
   "safety_deviations": [
-    "vma_adjust_dmabuf_huge: NULL find_vma result skips next-boundary split; stock recipe unchanged"
+    "vma_adjust_dmabuf_huge: NULL find_vma result skips next-boundary split; stock recipe unchanged",
+    "remap: validate VMA/page/physical ranges and full 2MiB PMD alignment before side effects",
+    "remap: reject occupied PMD/PTE destinations instead of overwrite/BUG",
+    "remap: failed pmd_set_huge withdraws and frees the newly deposited table; earlier mappings require caller unwind",
+    "generic __split_huge_pmd: VMA bit39 routes to recovered DMA split before generic file-backed teardown",
+    "move: occupied destination returns false with rmap locks released instead of BUG; caller uses split/PTE fallback"
   ],
   "preserved_hazards": [
-    "PMD remap ignores pmd_set_huge result; no 2MiB extent/alignment guard",
-    "ENOMEM leaves partial mappings"
+    "mapping failure can leave earlier partial mappings; caller must unwind before backing release"
   ]
 }

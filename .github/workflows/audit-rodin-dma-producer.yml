@@ -17,6 +17,13 @@ on:
       - scripts/test-dmabuf-audit-fault-plan.py
       - scripts/test-dmabuf-audit-log-formats.py
       - scripts/test-dmabuf-runtime-integration.py
+      - scripts/prepare-dmabuf-runtime-trace.py
+      - scripts/test-dmabuf-runtime-trace.py
+      - scripts/test-dmabuf-generic-split-routing.py
+      - scripts/test-dmabuf-move-safety.py
+      - scripts/test-dmabuf-guest-prefork.py
+      - scripts/test-dmabuf-remap-safety.py
+      - scripts/test-dmabuf-stock-remap-pmd.py
       - scripts/prepare-dmabuf-address-overlay.py
       - scripts/extract-dmabuf-address-selector.py
       - scripts/test-dmabuf-address-overlay.py
@@ -123,6 +130,13 @@ jobs:
             python3 scripts/test-dmabuf-fault-sites.py
           DMA_ACK_REFERENCE="$GITHUB_WORKSPACE/runtime-reference" \
             python3 scripts/test-dmabuf-runtime-integration.py
+          DMA_ACK_REFERENCE="$GITHUB_WORKSPACE/runtime-reference" \
+            python3 scripts/test-dmabuf-runtime-trace.py
+          DMA_ACK_REFERENCE="$GITHUB_WORKSPACE/runtime-reference" \
+            python3 scripts/test-dmabuf-generic-split-routing.py
+          python3 scripts/test-dmabuf-move-safety.py
+          python3 scripts/test-dmabuf-guest-prefork.py
+          python3 scripts/test-dmabuf-remap-safety.py --ack-helpers ws/common
           python3 scripts/validate-dmabuf-overlay.py --source ws/common \
             --overlay tools/stock-recovery/overlays/dma-6.6.77 --apply-review
           cp "tools/stock-recovery/overlays/dma-6.6.77/${{ matrix.profile }}.fragment" \

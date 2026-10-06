@@ -57,6 +57,38 @@ class Gates(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'symlink'):
             module.ordered_manifest(self.root, self.names)
 
+    def test_expected_composition_uses_verified_prewrite_snapshot(self):
+        records = {name: hashlib.sha256((self.root/name).read_bytes()).hexdigest()
+                   for name in self.names}
+        root_sha = module.ordered_manifest(self.root, self.names)
+        changed, added = self.names[0], 'mm/new.c'
+        after = {changed: hashlib.sha256(b'adapted').hexdigest(),
+                 added: hashlib.sha256(b'new').hexdigest()}
+        report = {'before': {changed: records[changed], added: '1'*64}, 'after': after}
+        expected = dict(records, **after)
+        serial = b''.join(name.encode()+b'\0'+bytes.fromhex(sha)
+                          for name,sha in sorted(expected.items()))
+        with patch.object(module, 'ROOT_MANIFEST', root_sha):
+            self.assertEqual(module.expected_composed_manifest(records, report),
+                             hashlib.sha256(serial).hexdigest())
+            # Mutated tree bytes cannot redefine the independent expectation.
+            (self.root/changed).write_text('unexpected drift')
+            self.assertEqual(module.expected_composed_manifest(records, report),
+                             hashlib.sha256(serial).hexdigest())
+            for bad in ({**records, changed: '0'*64},
+                        {name:sha for name,sha in records.items() if name!=changed}):
+                with self.assertRaisesRegex(ValueError,'snapshot'):
+                    module.expected_composed_manifest(bad, report)
+            report['before'][changed] = '0'*64
+            with self.assertRaisesRegex(ValueError,'preimage disagreement'):
+                module.expected_composed_manifest(records, report)
+            report['before'][changed] = records[changed]
+            for name, sha in (('../outside','0'*64), ('mm/bad.c','not a digest')):
+                bad_report={'before':dict(report['before'], **{name:'1'*64}),
+                            'after':dict(after, **{name:sha})}
+                with self.assertRaises(ValueError):
+                    module.expected_composed_manifest(records, bad_report)
+
     def args(self):
         return argparse.Namespace(source=self.root, ksu_source=self.root, susfs_source=self.root,
                                   fix_source=self.root, overlay=self.root, output=self.root / 'evidence.json')

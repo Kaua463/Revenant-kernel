@@ -78,7 +78,14 @@ def replace_exact(text,old,new,count=1):
     return text.replace(old,new)
 
 
-SAFETY_DEVIATIONS = ['vma_adjust_dmabuf_huge: NULL find_vma result skips next-boundary split; stock recipe unchanged']
+SAFETY_DEVIATIONS = [
+    'vma_adjust_dmabuf_huge: NULL find_vma result skips next-boundary split; stock recipe unchanged',
+    'remap: validate VMA/page/physical ranges and full 2MiB PMD alignment before side effects',
+    'remap: reject occupied PMD/PTE destinations instead of overwrite/BUG',
+    'remap: failed pmd_set_huge withdraws and frees the newly deposited table; earlier mappings require caller unwind',
+    'generic __split_huge_pmd: VMA bit39 routes to recovered DMA split before generic file-backed teardown',
+    'move: occupied destination returns false with rmap locks released instead of BUG; caller uses split/PTE fallback',
+]
 
 
 def integration_wrappers(recipe):
@@ -89,10 +96,80 @@ def integration_wrappers(recipe):
                          '\t\tnext_start = next->vm_start + adj_next;')
 
 
+def integration_remap(recipe):
+    """Safety deviations only; the hash-pinned stock reconstruction is immutable."""
+    recipe = replace_exact(recipe, '\tstruct mm_struct *mm = vma->vm_mm;\n'
+                           '\tunsigned long end = address + PAGE_ALIGN(size);',
+                           '\tstruct mm_struct *mm;\n\tunsigned long end, rounded;')
+    recipe = replace_exact(recipe, '\tBUG_ON(address & ~PAGE_MASK);', '''	/* Integration-only validation: caller still owns PFNs and mmap write lock.
+	 * Reject invalid ranges before flags, pgoff, allocations or publication.
+	 */
+	if (!vma || !vma->vm_mm || !size || size > ULONG_MAX - (PAGE_SIZE - 1) ||
+	    (address & ~PAGE_MASK))
+		return -EINVAL;
+	rounded = PAGE_ALIGN(size);
+	if (address < vma->vm_start || address >= vma->vm_end ||
+	    rounded > vma->vm_end - address || pfn > (PHYS_MASK >> PAGE_SHIFT) ||
+	    ((rounded >> PAGE_SHIFT) - 1) > (PHYS_MASK >> PAGE_SHIFT) - pfn)
+		return -EINVAL;
+	if (!map_type && ((address | rounded) & (HPAGE_PMD_SIZE - 1) ||
+			 (pfn & ((HPAGE_PMD_SIZE >> PAGE_SHIFT) - 1))))
+		return -EINVAL;
+	mm = vma->vm_mm;
+	end = address + rounded;''')
+    recipe = replace_exact(recipe, '\t\t\t\tptl = pmd_lock(mm, pmd);\n'
+                           '\t\t\t\tpgtable_trans_huge_deposit(mm, pmd, pgtable);',
+                           '''				ptl = pmd_lock(mm, pmd);
+				if (!pmd_none(*pmd)) {
+					spin_unlock(ptl);
+					pte_free(mm, pgtable);
+					return -EBUSY;
+				}
+				pgtable_trans_huge_deposit(mm, pmd, pgtable);''')
+    recipe = replace_exact(recipe, '''				pmd_set_huge(pmd, (address + physical_offset) & PAGE_MASK,
+						prot);''', '''				if (!pmd_set_huge(pmd, (address + physical_offset) & PAGE_MASK,
+						prot)) {
+					pgtable = pgtable_trans_huge_withdraw(mm, pmd);
+					mm_dec_nr_ptes(mm);
+					spin_unlock(ptl);
+					pte_free(mm, pgtable);
+					return -EINVAL;
+				}''')
+    recipe = replace_exact(recipe, '\t\t\t\tBUG_ON(!pte_none(*pte));', '''				/* Check every entry before bulk set_ptes, not only the first. */
+				for (unsigned int i = 0; i < count; i++) {
+					if (!pte_none(pte[i])) {
+						pte_unmap_unlock(pte, ptl);
+						return -EBUSY;
+					}
+				}''')
+    return recipe
+
+
+def integration_move(recipe):
+    return replace_exact(recipe, '\tBUG_ON(!pmd_none(*new_pmd));',
+                         '\t/* Integration safety: keep old mapping intact; let caller fall back. */\n'
+                         '\tif (!pmd_none(*new_pmd))\n\t\tgoto out_rmap;')
+
+
 def candidate(source,recipes):
     result=dict(source)
     for name in ('mm/memory.c','mm/mmap.c','mm/mremap.c','mm/huge_memory.c'):
         result[name]=replace_exact(result[name],'#include <linux/mm.h>\n','#include <linux/mm.h>\n#include <linux/xiaomi_dmabuf_huge.h>\n')
+    generic_split = '''void __split_huge_pmd(struct vm_area_struct *vma, pmd_t *pmd,
+		unsigned long address, bool freeze, struct folio *folio)
+{
+	spinlock_t *ptl;
+	struct mmu_notifier_range range;
+'''
+    result['mm/huge_memory.c'] = replace_exact(result['mm/huge_memory.c'], generic_split,
+                                             generic_split+'''#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB
+	/* Integration safety: generic file-backed split tears down PFN mappings. */
+	if (vma->vm_flags & VM_XIAOMI_DMABUF_HUGE) {
+		__split_dmabuf_huge_pmd(vma, pmd, address, freeze, folio);
+		return;
+	}
+#endif
+''')
     fork='\tif (!vma_needs_copy(dst_vma, src_vma))\n\t\treturn 0;\n'
     result['mm/memory.c']=replace_exact(result['mm/memory.c'],fork,fork+'''#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB
 	dmabuf_huge_fork_prepare(dst_vma, src_vma);
@@ -124,10 +201,12 @@ def candidate(source,recipes):
         ('\tvma_adjust_trans_huge(vma, vma->vm_start, addr, 0);',
          '\tdmabuf_huge_adjust_prepare(vma, vma->vm_start, addr);',1)):
         result['mm/mmap.c']=replace_exact(result['mm/mmap.c'],old,'#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB\n'+new+'\n#else\n'+old+'\n#endif',count)
-    core='\n#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB\n#if CONFIG_PGTABLE_LEVELS != 3 || !USE_SPLIT_PMD_PTLOCKS\n#error "Recovered DMA requires 3 page-table levels and split PMD locks"\n#endif\n'
+    core='\n#ifdef CONFIG_XIAOMI_DMABUF_HUGETLB\n#include <linux/limits.h>\n#include <asm/memory.h>\n#if CONFIG_PGTABLE_LEVELS != 3 || !USE_SPLIT_PMD_PTLOCKS\n#error "Recovered DMA requires 3 page-table levels and split PMD locks"\n#endif\n'
     for name in ('pmd_map','contpte_map','pmd_zap','pmd_split'):
         core+='atomic64_t dmabuf_hugetlb_'+name+' = ATOMIC64_INIT(0);\n'
-    core+='\n'+''.join((integration_wrappers(recipes[name]) if name=='wrappers' else recipes[name])+'\n' for name in ('zap','split','wrappers','range','move','remap'))+'#endif\n'
+    adapted = dict(recipes, wrappers=integration_wrappers(recipes['wrappers']),
+                   remap=integration_remap(recipes['remap']), move=integration_move(recipes['move']))
+    core+='\n'+''.join(adapted[name]+'\n' for name in ('zap','split','wrappers','range','move','remap'))+'#endif\n'
     result['mm/huge_memory.c']+=core
     header=HEADER
     for name in ('hooks','unmap_hook','move_hook','vma_hook'):
@@ -169,7 +248,7 @@ def run(args):
             'sources':SOURCES,'recipes':RECIPES,'changes':changes,
             'pending':['Kbuild enabled/disabled','KMI/module audit','producer alignment/ownership/unwind','VMA callbacks/refcounts','MMU/SMP/lifetime/hardware'],
             'safety_deviations':SAFETY_DEVIATIONS,
-            'preserved_hazards':['PMD remap ignores pmd_set_huge result; no 2MiB extent/alignment guard','ENOMEM leaves partial mappings']}
+            'preserved_hazards':['mapping failure can leave earlier partial mappings; caller must unwind before backing release']}
     (args.output/'manifest.json').write_text(json.dumps(report,indent=2)+'\n')
     print(f'Prepared {len(changes)} review-only files; no checkout/config/workflow/device changed')
 

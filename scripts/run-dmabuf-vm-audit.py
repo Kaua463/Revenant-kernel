@@ -57,6 +57,7 @@ def check_log(text):
     if (len(faults) != 4 or len(returns) != 8 or text.count('DMA_AUDIT_FAULT id=') != 4 or
             text.count('DMA_AUDIT_FAULT_RETURN') != 8 or text.count('DMA_GUEST_ENOMEM_PASS:') != 8):
         raise ValueError('missing/duplicate/malformed partial ENOMEM evidence')
+    owned_intervals = []
     for mode, device, inject in ((0, 'pmd', 0), (1, 'pte', 0),
                                  (0, 'fault-pmd', 2), (1, 'fault-pte', 2),
                                  (0, 'first-pmd', 1), (1, 'first-pte', 1),
@@ -77,9 +78,15 @@ def check_log(text):
         if len(allocated) != 1 or len(released) != 1 or text.count(boundary) != 1:
             raise ValueError('missing/duplicate mode lifetime: ' + device)
         release = released[0]
+        owned_intervals.append((allocation.start(), release.start(), mode))
         crossing = 'DMA_GUEST_CROSS_PGD: /dev/recovered-dma-audit-' + device + ' bytes=4194304 root_slots=2 data_verified=1'
         if text.count(crossing) != 1 or not allocation.start() < text.index(crossing) < text.index(boundary):
             raise ValueError('cross-PGD data proof missing/outside owned lifetime: '+device)
+        prefork = 'DMA_GUEST_PRE_FORK: /dev/recovered-dma-audit-' + device + ' move=1 protect=1 read_concurrent=1 cpu_migrate=1 data_verified=1'
+        fork = 'DMA_GUEST_FORK_PASS: /dev/recovered-dma-audit-' + device + ' shared_write=1 data_verified=1'
+        if text.count(prefork)!=1 or text.count(fork)!=1 or not text.index(crossing)<text.index(prefork)<text.index(fork)<text.index(boundary):
+            raise ValueError('pre-fork move/protect evidence missing/out of order: '+device)
+        check_huge_events(text[allocation.start():text.index(prefork)], mode, device)
         if release.group(2) != str(mode):
             raise ValueError('release does not match allocated buffer: ' + device)
         if not allocation.start() < text.index(boundary) < release.start() < text.index(completed):
@@ -105,10 +112,23 @@ def check_log(text):
                 cold = f'DMA_GUEST_COLD_RANGE mode={mode} bytes={ordinal << 30} aligned=1'
                 if text.count(cold) != 1 or not allocation.start() < text.index(cold) < fired[0].start():
                     raise ValueError('cold-PUD reservation order/mode mismatch: '+device)
-    check_export_log(text)
+    if text.count('DMA_GUEST_PRE_FORK:')!=12 or text.count('DMA_GUEST_FORK_PASS:')!=10 or text.count('DMA_EXPORT_FORK_PASS')!=2:
+        raise ValueError('missing/duplicate/malformed pre-fork coverage')
+    owned_intervals.extend(check_export_log(text))
+    # Successful helper logs have no pointers/IDs. Attribute them only when
+    # exactly one owned PMD buffer is live, never across unrelated lifetimes.
+    events = list(re.finditer(r'DMA_AUDIT_HUGE_(?:MOVE|SPLIT)\r?\n', text))
+    if len(events) != text.count('DMA_AUDIT_HUGE_'):
+        raise ValueError('malformed successful huge-helper event')
+    for event in events:
+        owners = [mode for start, end, mode in owned_intervals
+                  if start < event.start() < end]
+        if owners != [0]:
+            raise ValueError('huge-helper event outside unique owned PMD lifetime')
 
 
 def check_export_log(text):
+    owned_intervals = []
     allocated = list(re.finditer(r'DMA_EXPORT_ALLOC id=([1-9][0-9]*) mode=([01]) bytes=4194304\r?\n',text))
     released = list(re.finditer(r'DMA_EXPORT_RELEASE id=([1-9][0-9]*) mode=([01])\r?\n',text))
     mappings = list(re.finditer(r'DMA_EXPORT_MMAP id=([1-9][0-9]*) mode=([01]) bytes=([0-9]+) offset=0 huge=([01]) result=0\r?\n',text))
@@ -128,8 +148,14 @@ def check_export_log(text):
         complete = 'DMA_EXPORT_CASE_PASS mode='+str(mode)+' live=0'
         if len(releases) != 1 or text.count(complete) != 1 or text.count(boundary) != 1:
             raise ValueError('DMA-BUF final release/lifetime mismatch')
+        owned_intervals.append((allocation.start(), releases[0].start(), mode))
         if not allocation.start() < text.index(boundary) < releases[0].start() < text.index(complete) < text.index('DMA_GUEST_PASS:'):
             raise ValueError('DMA-BUF release outside final-unmap interval')
+        prefork = f'DMA_GUEST_PRE_FORK: export-mode-{mode} move=1 protect=1 read_concurrent=1 cpu_migrate=1 data_verified=1'
+        fork = f'DMA_EXPORT_FORK_PASS mode={mode} shared_write=1 data_verified=1'
+        if text.count(prefork)!=1 or text.count(fork)!=1 or not allocation.start()<text.index(prefork)<text.index(fork)<text.index(boundary):
+            raise ValueError('DMA-BUF pre-fork move/protect proof missing/out of order')
+        check_huge_events(text[allocation.start():text.index(prefork)],mode,'export-mode-'+str(mode))
         for length,mask,huge,hint in ((4096,4095,0,0),(65536,65535,0,1),
                                       (2097152,2097151,1,1),(4194304,2097151,1,0)):
             matching = [m for m in mappings if m.group(1,2) == allocation.group(1,2) and
@@ -139,6 +165,18 @@ def check_export_log(text):
                 raise ValueError('DMA-BUF callback/size/alignment proof missing')
             if not allocation.start() < matching[0].start() < text.index(alignment) < text.index(boundary):
                 raise ValueError('DMA-BUF callback/alignment order mismatch')
+            if not text.index(alignment)<text.index(prefork):
+                raise ValueError('DMA-BUF pre-fork test precedes alias creation')
+    return owned_intervals
+
+
+def check_huge_events(interval, mode, label):
+    moves=len(re.findall(r'DMA_AUDIT_HUGE_MOVE\r?\n',interval))
+    splits=len(re.findall(r'DMA_AUDIT_HUGE_SPLIT\r?\n',interval))
+    if moves!=interval.count('DMA_AUDIT_HUGE_MOVE') or splits!=interval.count('DMA_AUDIT_HUGE_SPLIT'):
+        raise ValueError('malformed successful huge-helper trace: '+label)
+    if moves!=(2 if mode==0 else 0) or splits!=(1 if mode==0 else 0):
+        raise ValueError('pre-fork did not execute expected recovered PMD move/split: '+label)
 
 
 def command(args):
@@ -187,6 +225,7 @@ def run(args):
                      'cold-PUD PMD-table ENOMEM in both modes; zero publication/accounting delta and retry',
                      'second cold-PUD allocation ENOMEM after one published block; exact 8KiB partial accounting and retry',
                      'ten owned 4MiB aliases cross two PGD slots with every data word verified',
+                     'twelve pre-fork move/full-and-partial-protect/discard guards with concurrent alias reads before fork data checks',
                      'page-table accounting returns to baseline after selected partial ENOMEM',
                      'real DMA-BUF core to exporter mmap, 4K/64K/2M/4M alignment including nonaligned hints',
                      'two DMA-BUF-owned buffers survive fd close/fork/move until final unmap'] if reason is None else [],

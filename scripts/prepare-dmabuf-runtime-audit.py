@@ -12,6 +12,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 validator = SourceFileLoader('runtime_dma_validator', str(ROOT / 'scripts/validate-dmabuf-overlay.py')).load_module()
 fault_sites = SourceFileLoader('runtime_dma_fault_sites', str(ROOT / 'scripts/prepare-dmabuf-fault-sites.py')).load_module()
+runtime_trace = SourceFileLoader('runtime_dma_trace', str(ROOT / 'scripts/prepare-dmabuf-runtime-trace.py')).load_module()
 PINS = {
     'recovered-dma-audit.c': '66ab45926e617544e8407a347a00d32ed8becbd7b05a4c5f1729c886ec1ba1fa',
     'recovered-dma-export-audit.c': 'ec4cf6663865992215d3d130a86cea978c02ee09514e8f081ca7bb0672de9b13',
@@ -68,7 +69,7 @@ def run(args):
             raise ValueError('producer input drift: ' + name)
         changes['mm/recovered-dma-audit/' + name] = (None, data)
     before = regular_path(args.source, 'mm/huge_memory.c').read_bytes()
-    changes['mm/huge_memory.c'] = (before, fault_sites.transform(before))
+    changes['mm/huge_memory.c'] = (before, runtime_trace.transform(fault_sites.transform(before)))
     for name, suffix in {
         'mm/Kconfig': '\n# Disposable VM audit only; never a phone build.\nsource "mm/recovered-dma-audit/Kconfig"\n',
         'mm/Makefile': '\n# Disposable VM audit only.\nobj-$(CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT) += recovered-dma-audit/\n',
