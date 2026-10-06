@@ -58,7 +58,14 @@ validated in a VM. `recovered-dma-audit-table-pmd`/`-table-pte` add the cold-PUD
 with PROT_NONE/NO_REPLACE, unmaps it, then maps at 4/6 GiB respectively.
 The kernel independently requires the real PUD entry to be zero; a populated
 entry fails closed, never silently changes the test to a leaf failure.
-All eight cases run the full retry/alias/fork/move/SMP workload.
+`recovered-dma-audit-table-cross-pmd`/`-table-cross-pte` add second-PGD-table
+failure after one published block. Both real root entries must initially be
+empty, and the 4 MiB mapping must straddle the 1 GiB boundary exactly. The guest
+reserves two whole slots without clobbering VMAs; the kernel checks both entries.
+At the selected failure, the first block must have owned PFNs, the second root
+must still be empty, and temporary accounting must be exactly 8 KiB (one PMD
+table plus one deposited/PTE table). Retry must restore the exact baseline.
+All ten cases run the full retry/alias/fork/move/SMP workload.
 Before creating any worker thread, each also reserves two empty 1 GiB VA slots
 with PROT_NONE/NO_REPLACE, removes that reservation, and maps a 4 MiB alias
 starting 2 MiB before the 16 GiB boundary. Every data word on both sides is
@@ -143,13 +150,13 @@ alone cannot prove publication because stock ignores `pmd_set_huge`'s return.
 The guest checks ENOMEM, mincore ENOMEM (no VMA), same-address NOREPLACE retry
 (including the producer's no-stale-table preflight), every data word and full
 basic alias/fork/move/split/SMP workload after retry. The current gate requires
-eight allocation/release IDs and six failure/retry sequences with exact ordinals,
+ten allocation/release IDs and eight failure/retry sequences with exact ordinals,
 publication state and strict final-unmap ordering. Run 37494587692 passed the
 older four-buffer/ordinal-two assertions only, not the new first-leaf cases.
 Cold-PUD failure additionally requires cold=1, zero published blocks, no
 first-block mapping and exactly zero temporary page-table accounting delta.
 The corresponding VA reservation marker must precede the failure callback.
-Failure allocating a later PGD slot after partial publication is still pending.
+The later-PGD failure guest is now implemented, but still awaits VM execution.
 `test-dmabuf-folded-levels.py` additionally compiles the exact pinned native
 `pgd_addr_end` macro and the recovered next-boundary expression with an explicit
 4K/VA39/three-level profile. Cross-boundary and unsigned-wrap tests pass; using
@@ -191,7 +198,7 @@ include that runner-specific regression. Canonical patch/path/hash gates remain
 unchanged.
 
 `guest-init.c` is static PID1 for the RAM archive only: mounts proc/sysfs,
-creates exactly eight mapper misc nodes plus the DMA-BUF exporter factory from
+creates exactly ten mapper misc nodes plus the DMA-BUF exporter factory from
 their technical sysfs dev numbers,
 executes the workload and powers off. GKI has no built-in devtmpfs here, so the
 archive includes only the standard 5:1 console node; audit nodes are discovered,
@@ -202,7 +209,7 @@ decode the archive independently and reject dynamic/wrong/truncated ELF/overwrit
 `run-dmabuf-vm-audit.py` checks built-in VM prerequisites and ARM64 Image magic,
 then runs four-CPU QEMU virt with no network, disks, monitor or host-directory
 shares, with bounded timeout. It saves serial logs on timeout/failure and
-requires all eight mapper-case markers, both exporter cases, guest and PID1 completion, no panic/BUG/Oops/
+requires all ten mapper-case markers, both exporter cases, guest and PID1 completion, no panic/BUG/Oops/
 warning, plus QEMU zero exit. Runner mock tests are **not VM execution**.
 Producer workflow now includes this runtime step with ephemeral binaries/archive;
 only logs/config/reports/tool versions are uploaded, never kernel or flash files.

@@ -42,8 +42,13 @@ def validate(source, config, makefile):
         'if (buffer->fault_pending && buffer->table_fault &&',
         '!pud_none(*(pud_t *)pgd_offset(vma->vm_mm, vma->vm_start))',
         'buffer->table_fault ? DMA_AUDIT_FAULT_PMD_TABLE : DMA_AUDIT_FAULT_LEAF',
-        'if (published || table_present || !cold)',
-        'cold = pud_none(*(pud_t *)pgd_offset(mm, audit_fault_vma->vm_start));',
+        'table_present != (audit_fault_plan.ordinal == 2) || !cold)',
+        '(audit_fault_plan.ordinal - 1) * DMA_AUDIT_BLOCK_BYTES));',
+        'misc_deregister(&audit_table_cross_pmd_device)',
+        'misc_deregister(&audit_table_pte_device)',
+        '(vma->vm_start & ((1UL << 30) - 1)) != (1UL << 30) - DMA_AUDIT_BLOCK_BYTES',
+        '!pud_none(*(pud_t *)pgd_offset(vma->vm_mm, vma->vm_start + DMA_AUDIT_BLOCK_BYTES))',
+        '(buffer->fault_ordinal == 1 ? 0 : 2 * PAGE_SIZE)',
         'table_present = audit_first_block_present(map_type);',
         'pmd_pfn(*pmd) == audit_fault_first_pfn',
         'pte_pfn(pte[index]) != audit_fault_first_pfn + index',
@@ -70,8 +75,8 @@ def validate(source, config, makefile):
                   'vm_file =', 'module_init(', 'module_exit('):
         if token in source:
             raise ValueError('forbidden audit interface: ' + token)
-    if source.count('.mode = 0600') != 8:
-        raise ValueError('all eight devices must be root-only')
+    if source.count('.mode = 0600') != 10:
+        raise ValueError('all ten devices must be root-only')
     release = source.split('static int audit_release(', 1)[1].split('static bool audit_empty_destination', 1)[0]
     if not release.index('__free_pages(') < release.index('kfree(buffer);') < release.index('pr_info('):
         raise ValueError('release event must follow both real frees')
@@ -88,8 +93,8 @@ def validate(source, config, makefile):
 class SourcePolicy(unittest.TestCase):
     def test_guest_mapper_cases_and_init_nodes_match_producer_inventory(self):
         names = re.findall(r'\.name = "(recovered-dma-audit-[^"]+)"',self.source)
-        self.assertEqual(len(names),8)
-        self.assertEqual(len(set(names)),8)
+        self.assertEqual(len(names),10)
+        self.assertEqual(len(set(names)),10)
         guest = (ROOT/'guest-workload.c').read_text()
         cases = re.findall(r'\bexercise\("/dev/([^"]+)", [01]\);',guest)
         self.assertCountEqual(cases,names)
@@ -101,25 +106,26 @@ class SourcePolicy(unittest.TestCase):
         body = self.source.split('static int __init audit_init(void)',1)[1].split('device_initcall',1)[0]
         names = ('audit_pmd_device','audit_pte_device','audit_fault_pmd_device',
                  'audit_fault_pte_device','audit_first_pmd_device','audit_first_pte_device',
-                 'audit_table_pmd_device','audit_table_pte_device')
+                 'audit_table_pmd_device','audit_table_pte_device',
+                 'audit_table_cross_pmd_device','audit_table_cross_pte_device')
         fixture = '''#include <assert.h>
 struct miscdevice { int index; };
-static int fail_at, registered, removed, seen[8], gone[8];
+static int fail_at, registered, removed, seen[10], gone[10];
 static int misc_register(struct miscdevice *d) {
- assert(registered < 8); seen[registered++] = d->index;
+ assert(registered < 10); seen[registered++] = d->index;
  return d->index == fail_at ? -19 : 0;
 }
 static void misc_deregister(struct miscdevice *d) {
- assert(removed < 8); gone[removed++] = d->index;
+ assert(removed < 10); gone[removed++] = d->index;
 }
 ''' + '\n'.join(f'static struct miscdevice {name} = {{{index}}};' for index,name in enumerate(names)) + '''
 static int audit_init(void)''' + body + '''
 int main(void) {
- for (fail_at = -1; fail_at < 8; fail_at++) {
+ for (fail_at = -1; fail_at < 10; fail_at++) {
   registered = removed = 0;
   int result = audit_init();
   assert(result == (fail_at < 0 ? 0 : -19));
-  assert(registered == (fail_at < 0 ? 8 : fail_at+1));
+  assert(registered == (fail_at < 0 ? 10 : fail_at+1));
   assert(removed == (fail_at < 0 ? 0 : fail_at));
   for (int i=0; i<registered; i++) assert(seen[i] == i);
   for (int i=0; i<removed; i++) assert(gone[i] == fail_at-i-1);
@@ -196,10 +202,19 @@ int main(void) {
         for token in ('if (buffer->fault_pending && buffer->table_fault &&',
                       '!pud_none(*(pud_t *)pgd_offset(vma->vm_mm, vma->vm_start))',
                       'buffer->table_fault ? DMA_AUDIT_FAULT_PMD_TABLE : DMA_AUDIT_FAULT_LEAF',
-                      'if (published || table_present || !cold)',
-                      'cold = pud_none(*(pud_t *)pgd_offset(mm, audit_fault_vma->vm_start));',
+                      'table_present != (audit_fault_plan.ordinal == 2) || !cold)',
+                      '(audit_fault_plan.ordinal - 1) * DMA_AUDIT_BLOCK_BYTES));',
                       'misc_deregister(&audit_table_pmd_device)',
                       'misc_deregister(&audit_first_pte_device)'):
+            with self.subTest(token=token), self.assertRaises(ValueError):
+                validate(self.source.replace(token,'REMOVED'),self.config,self.makefile)
+
+    def test_second_pgd_failure_requires_two_cold_slots_and_fixed_crossing_extent(self):
+        for token in ('(vma->vm_start & ((1UL << 30) - 1)) != (1UL << 30) - DMA_AUDIT_BLOCK_BYTES',
+                      '!pud_none(*(pud_t *)pgd_offset(vma->vm_mm, vma->vm_start + DMA_AUDIT_BLOCK_BYTES))',
+                      '(buffer->fault_ordinal == 1 ? 0 : 2 * PAGE_SIZE)',
+                      'misc_deregister(&audit_table_cross_pmd_device)',
+                      'misc_deregister(&audit_table_pte_device)'):
             with self.subTest(token=token), self.assertRaises(ValueError):
                 validate(self.source.replace(token,'REMOVED'),self.config,self.makefile)
 

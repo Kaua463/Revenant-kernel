@@ -55,6 +55,8 @@ int main(void)
 	make_audit_node("recovered-dma-audit-first-pte");
 	make_audit_node("recovered-dma-audit-table-pmd");
 	make_audit_node("recovered-dma-audit-table-pte");
+	make_audit_node("recovered-dma-audit-table-cross-pmd");
+	make_audit_node("recovered-dma-audit-table-cross-pte");
 	make_audit_node("recovered-dma-export-audit");
 	child = fork();
 	if (child < 0)

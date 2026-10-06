@@ -899,6 +899,29 @@ VM37519394415 ainda pending/jobs=[]; novo guest não executado remotamente.
 Todos gates full-DMA/stockproducer/root/KMI/hardware continuam pendentes;
 T20 permanece ~, não instalar nem alegar cross-boundary runtime pass.
 
+### Checkpoint — local-first; second-PGD failure conjunto fechado localmente
+
+Instrução atual do usuário: terminar implementação/revisão/testes locais antes
+de novo push/Actions. Não disparar build por cada correção. Não interpretar
+code/local-test completion como runtime/MMU/hardware pass. Runs já existentes
+não foram cancelados/reiniciados; nenhum novo push/dispatch nesta etapa.
+
+table-cross-pmd/table-cross-pte implementados, root0600/CAP_SYS_ADMIN.
+Guest reserva2GiB sem clobber e usa8/12GiB+1GiB-2MiB para cruzar dois slots.
+Preflight exige ambos PUDs vazios, size4M e startmod1GiB=1GiB-2M.
+Site PMD_TABLE ordinal2: callback relê segundo PUD vazio e primeiro bloco
+publicado com PFNs próprios; publication1/table1/cold1. Accounting temporário
+exato8K, baseline restaurada antes de retry. ACK mm/memory.c __pmd_alloc
+incrementa nr_pmds e mapper PMD incrementa nr_ptes; PTE path cria uma tabela.
+Isso fundamenta o gate8K, não prova o unwind nativo até VM executar.
+
+Parser/hostfixtures/init/sourceinventory/pin atualizados como conjunto para10
+buffers,8falhas,10crossaliases e quatro cold-range markers. Negativas focadas
+em second-PGD publication/ordinal/ID/mode/cold, accounting0/4K/12K/leak,
+reserva de tamanho errado. Init failure matrix cobre todos10register sites.
+T20/V35/V39: código e locais avançaram; stockproducer activation e revisão
+transitiva restante continuam obrigatórios antes de chamar local completo.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

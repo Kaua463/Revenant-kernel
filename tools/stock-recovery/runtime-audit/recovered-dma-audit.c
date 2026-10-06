@@ -125,12 +125,14 @@ bool recovered_dma_audit_fail_pmd_table(struct mm_struct *mm, unsigned int map_t
 			(unsigned long)mm, DMA_AUDIT_FAULT_PMD_TABLE))
 		return false;
 	mmap_assert_write_locked(mm);
-	cold = pud_none(*(pud_t *)pgd_offset(mm, audit_fault_vma->vm_start));
+	cold = pud_none(*(pud_t *)pgd_offset(mm, audit_fault_vma->vm_start +
+			(audit_fault_plan.ordinal - 1) * DMA_AUDIT_BLOCK_BYTES));
 	published = atomic64_read(map_type ? &dmabuf_hugetlb_contpte_map :
 				 &dmabuf_hugetlb_pmd_map) - audit_fault_maps_before;
 	table_present = audit_first_block_present(map_type);
 	audit_fault_buffer->table_bytes_partial = mm_pgtables_bytes(mm);
-	if (published || table_present || !cold)
+	if (published != audit_fault_plan.ordinal - 1 ||
+	    table_present != (audit_fault_plan.ordinal == 2) || !cold)
 		pr_err("DMA_AUDIT_FAULT_FAIL: cold-PUD count=%lld table=%u cold=%u\n",
 			published, table_present, cold);
 	pr_info("DMA_AUDIT_TABLE_FAULT id=%llu mode=%u ordinal=%u published=%lld table=%u cold=%u\n",
@@ -168,6 +170,8 @@ static struct miscdevice audit_first_pmd_device;
 static struct miscdevice audit_first_pte_device;
 static struct miscdevice audit_table_pmd_device;
 static struct miscdevice audit_table_pte_device;
+static struct miscdevice audit_table_cross_pmd_device;
+static struct miscdevice audit_table_cross_pte_device;
 
 static int audit_open(struct inode *inode, struct file *file)
 {
@@ -179,7 +183,8 @@ static int audit_open(struct inode *inode, struct file *file)
 	if (device != &audit_pmd_device && device != &audit_pte_device &&
 	    device != &audit_fault_pmd_device && device != &audit_fault_pte_device &&
 	    device != &audit_first_pmd_device && device != &audit_first_pte_device &&
-	    device != &audit_table_pmd_device && device != &audit_table_pte_device)
+	    device != &audit_table_pmd_device && device != &audit_table_pte_device &&
+	    device != &audit_table_cross_pmd_device && device != &audit_table_cross_pte_device)
 		return -ENODEV;
 	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer)
@@ -191,10 +196,13 @@ static int audit_open(struct inode *inode, struct file *file)
 		return -ENOMEM;
 	}
 	buffer->map_type = device == &audit_pte_device || device == &audit_fault_pte_device ||
-		device == &audit_first_pte_device || device == &audit_table_pte_device;
-	buffer->table_fault = device == &audit_table_pmd_device || device == &audit_table_pte_device;
+		device == &audit_first_pte_device || device == &audit_table_pte_device ||
+		device == &audit_table_cross_pte_device;
+	buffer->table_fault = device == &audit_table_pmd_device || device == &audit_table_pte_device ||
+		device == &audit_table_cross_pmd_device || device == &audit_table_cross_pte_device;
 	buffer->fault_ordinal = device == &audit_first_pmd_device ||
-		device == &audit_first_pte_device || buffer->table_fault ? 1 : 2;
+		device == &audit_first_pte_device || device == &audit_table_pmd_device ||
+		device == &audit_table_pte_device ? 1 : 2;
 	buffer->fault_pending = device == &audit_fault_pmd_device || device == &audit_fault_pte_device ||
 		device == &audit_first_pmd_device || device == &audit_first_pte_device || buffer->table_fault;
 	buffer->id = (unsigned long long)atomic64_inc_return(&audit_next_id);
@@ -283,6 +291,11 @@ static int audit_mmap(struct file *file, struct vm_area_struct *vma)
 	if (buffer->fault_pending && buffer->table_fault &&
 	    !pud_none(*(pud_t *)pgd_offset(vma->vm_mm, vma->vm_start)))
 		return -EINVAL;
+	if (buffer->fault_pending && buffer->table_fault && buffer->fault_ordinal == 2 &&
+	    ((vma->vm_start & ((1UL << 30) - 1)) != (1UL << 30) - DMA_AUDIT_BLOCK_BYTES ||
+	     vma->vm_end - vma->vm_start != AUDIT_BYTES ||
+	     !pud_none(*(pud_t *)pgd_offset(vma->vm_mm, vma->vm_start + DMA_AUDIT_BLOCK_BYTES))))
+		return -EINVAL;
 	vm_flags_clear(vma, VM_MAYEXEC);
 	/* No .open/.close refs: failed mmap has no balancing vma_close.
 	 * mmap syscall fget holds file-owned backing across partial-map unwind.
@@ -304,7 +317,9 @@ static int audit_mmap(struct file *file, struct vm_area_struct *vma)
 		table_bytes_retry = mm_pgtables_bytes(vma->vm_mm);
 		if (table_bytes_retry != buffer->table_bytes_before ||
 		    buffer->table_bytes_partial < buffer->table_bytes_before ||
-		    (buffer->table_fault ? buffer->table_bytes_partial != buffer->table_bytes_before :
+		    (buffer->table_fault ?
+		     buffer->table_bytes_partial - buffer->table_bytes_before !=
+			(buffer->fault_ordinal == 1 ? 0 : 2 * PAGE_SIZE) :
 		    (buffer->fault_ordinal == 1 ?
 		     (buffer->table_bytes_partial != buffer->table_bytes_before &&
 		      buffer->table_bytes_partial - buffer->table_bytes_before != PAGE_SIZE) :
@@ -424,6 +439,20 @@ static struct miscdevice audit_table_pte_device = {
 	.mode = 0600,
 };
 
+static struct miscdevice audit_table_cross_pmd_device = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "recovered-dma-audit-table-cross-pmd",
+	.fops = &audit_fops,
+	.mode = 0600,
+};
+
+static struct miscdevice audit_table_cross_pte_device = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "recovered-dma-audit-table-cross-pte",
+	.fops = &audit_fops,
+	.mode = 0600,
+};
+
 static int __init audit_init(void)
 {
 	int error = misc_register(&audit_pmd_device);
@@ -451,7 +480,17 @@ static int __init audit_init(void)
 	error = misc_register(&audit_table_pte_device);
 	if (error)
 		goto undo_table_pmd;
+	error = misc_register(&audit_table_cross_pmd_device);
+	if (error)
+		goto undo_table_pte;
+	error = misc_register(&audit_table_cross_pte_device);
+	if (error)
+		goto undo_table_cross_pmd;
 	return 0;
+undo_table_cross_pmd:
+	misc_deregister(&audit_table_cross_pmd_device);
+undo_table_pte:
+	misc_deregister(&audit_table_pte_device);
 undo_table_pmd:
 	misc_deregister(&audit_table_pmd_device);
 undo_first_pte:

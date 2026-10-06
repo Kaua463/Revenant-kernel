@@ -32,35 +32,38 @@ def check_log(text):
                    'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-first-pte',
                    'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-table-pmd',
                    'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-table-pte',
+                   'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-table-cross-pmd',
+                   'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-table-cross-pte',
                    'DMA_GUEST_PASS:', 'DMA_VM_RESULT_PASS:'):
         if text.count(marker) != 1:
             raise ValueError('missing/duplicate guest completion: ' + marker)
     allocations = list(re.finditer(r'DMA_AUDIT_ALLOC id=([1-9][0-9]*) mode=([01]) bytes=4194304 fault=([01])\r?\n', text))
     releases = list(re.finditer(r'DMA_AUDIT_RELEASE id=([1-9][0-9]*) mode=([01])\r?\n', text))
-    if (len(allocations) != 8 or len(releases) != 8 or
-            text.count('DMA_AUDIT_ALLOC') != 8 or text.count('DMA_AUDIT_RELEASE') != 8):
+    if (len(allocations) != 10 or len(releases) != 10 or
+            text.count('DMA_AUDIT_ALLOC') != 10 or text.count('DMA_AUDIT_RELEASE') != 10):
         raise ValueError('missing/duplicate/malformed allocation or final release')
-    if len({match.group(1) for match in allocations}) != 8:
+    if len({match.group(1) for match in allocations}) != 10:
         raise ValueError('allocation IDs must be unique')
-    if text.count('DMA_GUEST_CROSS_PGD:') != 8:
+    if text.count('DMA_GUEST_CROSS_PGD:') != 10:
         raise ValueError('missing/duplicate cross-PGD mapping evidence')
     faults = list(re.finditer(r'DMA_AUDIT_FAULT id=([1-9][0-9]*) mode=([01]) ordinal=([12]) published=([01]) table=([01])\r?\n', text))
-    table_faults = list(re.finditer(r'DMA_AUDIT_TABLE_FAULT id=([1-9][0-9]*) mode=([01]) ordinal=(1) published=(0) table=(0) cold=1\r?\n',text))
-    if len(table_faults) != 2 or text.count('DMA_AUDIT_TABLE_FAULT') != 2 or text.count('DMA_GUEST_COLD_RANGE') != 2:
+    table_faults = list(re.finditer(r'DMA_AUDIT_TABLE_FAULT id=([1-9][0-9]*) mode=([01]) ordinal=([12]) published=([01]) table=([01]) cold=1\r?\n',text))
+    if len(table_faults) != 4 or text.count('DMA_AUDIT_TABLE_FAULT') != 4 or text.count('DMA_GUEST_COLD_RANGE') != 4:
         raise ValueError('missing/duplicate/malformed cold-PUD evidence')
     returns = list(re.finditer(r'DMA_AUDIT_FAULT_RETURN id=([1-9][0-9]*) mode=([01]) result=-12 fired=1\r?\n', text))
     unwinds = list(re.finditer(r'DMA_AUDIT_UNWIND id=([1-9][0-9]*) mode=([01]) before=([0-9]+) partial=([0-9]+) retry=([0-9]+)\r?\n', text))
-    if len(unwinds) != 6 or text.count('DMA_AUDIT_UNWIND') != 6:
+    if len(unwinds) != 8 or text.count('DMA_AUDIT_UNWIND') != 8:
         raise ValueError('missing/duplicate/malformed page-table accounting evidence')
-    if (len(faults) != 4 or len(returns) != 6 or text.count('DMA_AUDIT_FAULT id=') != 4 or
-            text.count('DMA_AUDIT_FAULT_RETURN') != 6 or text.count('DMA_GUEST_ENOMEM_PASS:') != 6):
+    if (len(faults) != 4 or len(returns) != 8 or text.count('DMA_AUDIT_FAULT id=') != 4 or
+            text.count('DMA_AUDIT_FAULT_RETURN') != 8 or text.count('DMA_GUEST_ENOMEM_PASS:') != 8):
         raise ValueError('missing/duplicate/malformed partial ENOMEM evidence')
     for mode, device, inject in ((0, 'pmd', 0), (1, 'pte', 0),
                                  (0, 'fault-pmd', 2), (1, 'fault-pte', 2),
                                  (0, 'first-pmd', 1), (1, 'first-pte', 1),
-                                 (0, 'table-pmd', 3), (1, 'table-pte', 3)):
-        selected_faults = table_faults if inject == 3 else faults
-        ordinal = 1 if inject == 3 else inject
+                                 (0, 'table-pmd', 3), (1, 'table-pte', 3),
+                                 (0, 'table-cross-pmd', 4), (1, 'table-cross-pte', 4)):
+        selected_faults = table_faults if inject >= 3 else faults
+        ordinal = inject-2 if inject >= 3 else inject
         allocated = [match for match in allocations if match.group(2) == str(mode) and match.group(3) == str(inject)]
         if inject:
             scenario_ids = {m.group(1) for m in selected_faults if m.group(2,3) == (str(mode),str(ordinal))}
@@ -93,13 +96,13 @@ def check_log(text):
             before, partial, after = map(int, unwound[0].group(3, 4, 5))
             if fired[0].group(3,4,5) != (str(ordinal),str(ordinal-1),str(ordinal-1)):
                 raise ValueError('fault ordinal/publication mismatch: ' + device)
-            deltas = (0,) if inject == 3 else (0,4096) if inject == 1 else (4096,8192)
+            deltas = (8192,) if inject == 4 else (0,) if inject == 3 else (0,4096) if inject == 1 else (4096,8192)
             if before % 4096 or after != before or partial - before not in deltas:
                 raise ValueError('page-table accounting did not return to baseline: ' + device)
             if not allocation.start() < fired[0].start() < returned[0].start() < unwound[0].start() < text.index(retry) < text.index(crossing) < text.index(boundary):
                 raise ValueError('partial ENOMEM lifetime order wrong: ' + device)
-            if inject == 3:
-                cold = f'DMA_GUEST_COLD_RANGE mode={mode} bytes=1073741824 aligned=1'
+            if inject >= 3:
+                cold = f'DMA_GUEST_COLD_RANGE mode={mode} bytes={ordinal << 30} aligned=1'
                 if text.count(cold) != 1 or not allocation.start() < text.index(cold) < fired[0].start():
                     raise ValueError('cold-PUD reservation order/mode mismatch: '+device)
     check_export_log(text)
@@ -179,10 +182,11 @@ def run(args):
         'failure': reason, 'command': cmd,
         'kernel_sha256': hashlib.sha256(image).hexdigest(),
         'initramfs_sha256': hashlib.sha256(initramfs).hexdigest(),
-        'verified': ['basic guest workload', 'eight file-owned buffers freed exactly once after final unmap',
+        'verified': ['basic guest workload', 'ten file-owned buffers freed exactly once after final unmap',
                      'PMD/PTE first and second leaf ENOMEM; publication checks and same-address retry',
                      'cold-PUD PMD-table ENOMEM in both modes; zero publication/accounting delta and retry',
-                     'eight owned 4MiB aliases cross two PGD slots with every data word verified',
+                     'second cold-PUD allocation ENOMEM after one published block; exact 8KiB partial accounting and retry',
+                     'ten owned 4MiB aliases cross two PGD slots with every data word verified',
                      'page-table accounting returns to baseline after selected partial ENOMEM',
                      'real DMA-BUF core to exporter mmap, 4K/64K/2M/4M alignment including nonaligned hints',
                      'two DMA-BUF-owned buffers survive fd close/fork/move until final unmap'] if reason is None else [],

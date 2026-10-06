@@ -15,13 +15,15 @@ def mock_pass():
     for identity, mode, device, inject in ((1, 0, 'pmd', 0), (2, 1, 'pte', 0),
                                            (3, 0, 'fault-pmd', 2), (4, 1, 'fault-pte', 2),
                                            (5, 0, 'first-pmd', 1), (6, 1, 'first-pte', 1),
-                                           (7, 0, 'table-pmd', 3), (8, 1, 'table-pte', 3)):
+                                           (7, 0, 'table-pmd', 3), (8, 1, 'table-pte', 3),
+                                           (9, 0, 'table-cross-pmd', 4), (10, 1, 'table-cross-pte', 4)):
         lines.append(f'DMA_AUDIT_ALLOC id={identity} mode={mode} bytes=4194304 fault={int(bool(inject))}')
         if inject:
-            partial = 16384 if inject == 2 else 12288
-            if inject == 3:
-                lines.append(f'DMA_GUEST_COLD_RANGE mode={mode} bytes=1073741824 aligned=1')
-                fired = f'DMA_AUDIT_TABLE_FAULT id={identity} mode={mode} ordinal=1 published=0 table=0 cold=1'
+            partial = 20480 if inject == 4 else 16384 if inject == 2 else 12288
+            if inject >= 3:
+                ordinal = inject-2
+                lines.append(f'DMA_GUEST_COLD_RANGE mode={mode} bytes={ordinal << 30} aligned=1')
+                fired = f'DMA_AUDIT_TABLE_FAULT id={identity} mode={mode} ordinal={ordinal} published={ordinal-1} table={ordinal-1} cold=1'
             else:
                 fired = f'DMA_AUDIT_FAULT id={identity} mode={mode} ordinal={inject} published={inject-1} table={inject-1}'
             lines.extend((fired,
@@ -49,6 +51,27 @@ PASS = mock_pass()
 
 
 class Runner(unittest.TestCase):
+    def test_second_pgd_failure_requires_one_owned_block_and_exact_two_table_pages(self):
+        event = 'DMA_AUDIT_TABLE_FAULT id=9 mode=0 ordinal=2 published=1 table=1 cold=1'
+        for before,after in (('ordinal=2','ordinal=1'),('published=1','published=0'),
+                             ('table=1','table=0'),('cold=1','cold=0'),
+                             ('id=9','id=7'),('mode=0','mode=1')):
+            with self.subTest(before=before), self.assertRaises(ValueError):
+                module.check_log(PASS.replace(event,event.replace(before,after)))
+        accounting = 'DMA_AUDIT_UNWIND id=9 mode=0 before=12288 partial=20480 retry=12288'
+        for replacement in ('',accounting.replace('partial=20480','partial=16384'),
+                            accounting.replace('partial=20480','partial=12288'),
+                            accounting.replace('partial=20480','partial=24576'),
+                            accounting.replace('retry=12288','retry=20480'),
+                            accounting.replace('id=9','id=10')):
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                module.check_log(PASS.replace(accounting,replacement))
+        cold = 'DMA_GUEST_COLD_RANGE mode=0 bytes=2147483648 aligned=1'
+        for replacement in ('',cold.replace('2147483648','1073741824'),
+                            cold.replace('mode=0','mode=1')):
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                module.check_log(PASS.replace(cold,replacement))
+
     def test_cross_pgd_data_proof_is_required_for_every_owned_buffer(self):
         crossing = 'DMA_GUEST_CROSS_PGD: /dev/recovered-dma-audit-pmd bytes=4194304 root_slots=2 data_verified=1'
         for replacement in ('',crossing.replace('root_slots=2','root_slots=1'),

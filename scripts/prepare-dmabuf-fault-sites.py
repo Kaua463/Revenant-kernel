@@ -90,9 +90,10 @@ def run(args):
             'leaf_ordinal_2': 'existing guest; current Image needs VM validation',
             'leaf_ordinal_1': 'first-pmd/first-pte guest implemented; VM not validated',
             'pmd_table': 'table-pmd/table-pte cold-PUD guest implemented; VM not validated',
+            'pmd_table_ordinal_2': 'table-cross-pmd/table-cross-pte partial-publication guest implemented; VM not validated',
         },
         'pending': ['first-leaf and cold-PUD VM execution',
-                    'later PGD-slot allocation failure after partial publication',
+                    'later PGD-slot failure VM execution after partial publication',
                     'all allocation failures and complete unwind runtime'],
     }
     (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
