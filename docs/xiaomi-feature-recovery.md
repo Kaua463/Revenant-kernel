@@ -12,7 +12,7 @@ Ferramenta `scripts/recover-stock-features.py`: somente lê entradas; preserva b
 
 |Família|Símbolos candidatos|Referências BL|Estado|
 |---|---|---|---|
-|DMA-BUF huge pages|14|68|9 corpos recuperados/testados em emulação: wrappers, split, lock/zap, range e remap; move, helpers, ownership e integração incompletos|
+|DMA-BUF huge pages|14|68|10 corpos reconstruídos com testes delimitados; move ainda sem variante range-TLBI; helpers, ownership e integração incompletos|
 |XRING LB|63|340|Interface ioctl parcialmente recuperada; handlers ainda não reimplementados|
 |F2FS fastdiscard|5|1|Inclui atributos; caminhos genéricos ainda precisam ser rastreados|
 |SCSI fastdiscard|0|0|CONFIG stock ativa; falta rastrear alterações nas funções genéricas|
@@ -122,7 +122,15 @@ Casos de falha variam independentemente do tamanho; asserts exigem cada categori
 
 Fixtures: ptlock do PMD fica em offset40 da struct page/ptdesc; fixture novo inicialmente copiou endereço da página adjacente usado pelo teste split, diferença de 64 bytes detectada e corrigida. BTF e trace agora conferem página certa. Teste PTE precisou mapear system_cpucaps BSS em contexto privado; não são bytes extraídos. V39/V40 já cobrem esses gates, nenhuma mudança de contrato de produção.
 
-Fontes de interface em `outputs/stock-ack-mm-reference-20261005`, `stock-ack-mm-interfaces-20261005`, `stock-ack-pgalloc-reference-20261005`, `stock-ack-tlb-reference-20261005`, `stock-ack-remap-reference-20261005`: commit ACK exato e cada payload Git blob/SHA256 verificado. Recurso inteiro continua incompleto: move, helpers, hooks/callers/lifetime por recuperar. Nada integrado ou instalável.
+### Move: primeira variante arquitetural comparada
+
+`dmabuf_huge_move.recovered.c`: lock rmap file→anon se solicitado; destino PMD não vazio causa BUG antes de old PMD lock. Old não huge retorna false; transferência válida limpa old atomicamente, retira/deposita tabela somente se páginas de PMD diferentes, publica entry **sem alterar soft-dirty**, faz flush se present, libera locks em ordem reversa. Diferente do helper THP genérico que aceita mais casos de destino e modifica soft-dirty. Não substituir silenciosamente por move_huge_pmd.
+
+`test-dmabuf-stock-move.py`: 384 casos ARM64, com range-TLBI desabilitado no contexto privado. 244 movimentos, 123 rejects old, 17 BUGs de destino; 96 casos com rmap, 122 transferências deposit, 45 sync_icache, 15 MTE tags e 124 flushes com ASIDs pareados. Compara PMDs, retorno, locks, argumentos, barreiras e operandos TLBI (opcodes SYS interceptados após registrar; efeito MMU não executado). BTF valida assinatura e offsets transitivos de VMA/file/address_space/anon_vma/mm/ptdesc. Campos system_cpucaps são BSS privado, não dados extraídos.
+
+Modelo host usa helpers arch de ACK exato e reproduz **somente variante sem range-TLBI** para os intervalos deste teste; não prova range-TLBI, helpers cache/tag/notifier, CPU alternatives efetivos, hardware/SMP/lifetime. Fonte usa flush_tlb_range/set_pmd_at reais na futura integração, mas ainda não compilou em Kbuild. Recurso não concluído por existirem os dez corpos: transitive helpers e callers continuam obrigatórios.
+
+Fontes de interface em `outputs/stock-ack-mm-reference-20261005`, `stock-ack-mm-interfaces-20261005`, `stock-ack-pgalloc-reference-20261005`, `stock-ack-tlb-reference-20261005`, `stock-ack-remap-reference-20261005`, `stock-ack-move-reference-20261005`: commit ACK exato e cada payload Git blob/SHA256 verificado. Recurso inteiro continua incompleto: variante range-TLBI, helpers, hooks/callers/lifetime, integração e gates por validar. Nada integrado ou instalável.
 
 ## Verificação executada
 
