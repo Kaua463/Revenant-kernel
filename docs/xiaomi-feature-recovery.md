@@ -458,6 +458,47 @@ logs/config/JSON/versions, excluindo kernel/archive/executáveis. YAML/Bash gate
 passaram; nenhuma alegação de VM verde antes de serial real. ENOMEM parcial,
 free final e stock producer continuam pending mesmo se workload básico passar.
 
+### Busca ampliada de ativação DMA e novo erro do gate de banner
+
+Stock Image/kallsyms SHA exatos: scanner de B/BL, ADR, ADRP+ADD **adjacente**,
+valor absoluto da entry e todas ORR logical-immediate incluindo bit39. Decoders
+testados com Capstone: 16.384 encodings logical-immediate e 80 ADR/ADRP signed/
+page-boundary casos. Text e inittext file-backed; owners são spans inferidos,
+não CFG. Resultado outputs/stock-dma-activation-patterns-20261006.json:
+zero branches/endereços/pointers de entry, 1661 ORR masks contendo bit39, nove
+exact-bit39; único owner DMA é próprio remap. Outras máscaras incluem valores
+canônicos/endereço/vector constants, não presumir vm_flags.
+
+Módulos: referência SHA c89309f2205c70dd87d8b3c3a6c679480582b6e9313573b1f3f894d5bad8146c,
+610 rows/574 conteúdos únicos hash-selected, 19.578.718 bytes executable sections.
+Scanner read-only ELF/symbol-bounds e ORR em **todo conjunto**, não só GPU18;
+nenhum target symbol/literal; 519 masks incluindo bit39; exact-bit39 só
+bluetooth.vendor_diag_write e mac80211.sta_set_sinfo. NOBITS não extraído/modelado
+como payload. Cross-assembled synthetic ARM64 ELF test passou; scan v2 byte-equal
+ao primeiro report em outputs/stock-dma-module-activation-patterns-20261006-v2.json.
+Não resolve registradores/loads/lookup dinâmico ou VMA store/caller reachability;
+zero patterns ≠ recurso unused, nem prova de ganho.
+
+Userspace init+workload compile run 37428061928/head5985458 completed success;
+artifact metadata downloaded outputs/dma-guest-source-37428061928: static ELF,
+native PID1/architecture refusal e newc archive1.560.576bytes/SHA
+87cdacac4326b8f79383cb32c8c74e4515a2bfdf2de913a70ee592067c37d5bc.
+Não guest execution. Produtor/QEMU37428061875 confirmado Fetch pinned ACK ativo.
+
+Composto37426905255 terminou failure após compile/providers/KFENCE/config/
+610modules/3506CRCs/certificado/23settings aprovados: banner checker final falhou.
+Root cause reproduzido: rawregex double-escaped excluía caracteres literais n/0,
+truncando Linux release em 6.6.77-a. Após fix, Image stock real revelou **duas
+cópias idênticas** do banner, logo count=1 também incorreto. Novo checker aceita
+um conteúdo concreto único, rejeita qualquer versão/sufixo/body divergente e
+ignora apenas templates sem versão numérica. Quatro regressions passaram,
+incluindo fails-before-fix e actual pinned stock Image. Não relaxa pin/ABI.
+Actual candidate banner continua não comprovado; erro anterior não o registrava.
+Workflow usa checker separado; validator exige release gate e quinto negativo.
+Backprop §B proposta: double escaping/identical aliases → parser tested stock,
+V28 já exige release exato; SPEC não editado sem aprovação. Nova auditoria
+composta necessária; nenhuma alteração da fonte kernel/SCM para esconder erro.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

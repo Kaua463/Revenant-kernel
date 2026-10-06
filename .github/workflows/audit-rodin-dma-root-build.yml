@@ -155,14 +155,10 @@ jobs:
           assert all(actual.get(k)==v for k,v in expected.items()), 'compiled root/DMA setting differs from pinned fragment'
           print('PASS: every requested root/DMA setting retained in compiled config')
           PY
-          python3 - "$image" "$STOCK_KERNEL_RELEASE" <<'PY'
-          from pathlib import Path
-          import re,sys
-          banners=re.findall(rb'Linux version [^\0\n]+',Path(sys.argv[1]).read_bytes())
-          matching=[b for b in banners if b.startswith(('Linux version '+sys.argv[2]+' ').encode())]
-          assert len(matching)==1, 'exact stock release banner missing or ambiguous'
-          Path('dma-root-build-evidence/kernel-banner.txt').write_bytes(matching[0]+b'\n')
-          PY
+          python3 scripts/test-stock-release-banner.py
+          python3 scripts/check-stock-release-banner.py --image "$image" \
+            --expected-release "$STOCK_KERNEL_RELEASE" \
+            --output dma-root-build-evidence/kernel-banner.txt
           git -C ws/.repo/manifests rev-parse HEAD > dma-root-build-evidence/build-manifest.commit
       - name: Preserve audit evidence (no image or installer)
         if: always()

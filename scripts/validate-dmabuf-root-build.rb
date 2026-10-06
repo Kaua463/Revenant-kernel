@@ -39,9 +39,10 @@ def validate_build(workflow)
   %w[--lto=none --page_size=4k dma_root_audit.fragment kernel_aarch64_dist].each { |token| raise 'build control missing' unless build.include?(token) }
   raise 'root version gate missing' unless build.include?('-- KernelSU-Next version: 33239') && build.include?('fallback:')
   check = steps[6]['run']
-  %w[select_equal check-dmabuf-build.py rom-module-reference.py check-stock-kfence.py check-stock-config-alignment.py].each do |token|
+  %w[select_equal check-dmabuf-build.py rom-module-reference.py check-stock-kfence.py check-stock-config-alignment.py check-stock-release-banner.py test-stock-release-banner.py].each do |token|
     raise 'compiled ABI/config gate missing' unless check.include?(token)
   end
+  raise 'release pin not checked' unless check.include?('--expected-release "$STOCK_KERNEL_RELEASE"')
   commands = steps.map { |s| s['run'].to_s }.join("\n")
   raise 'device/installer in audit' if commands.match(/\b(?:adb|fastboot|kexec)\b|package-rodin|gh release|upload-release/)
   raise 'logs not retained' unless steps[7]['if'] == 'always()'
@@ -54,7 +55,8 @@ if __FILE__ == $0
   [lambda { |w| w['env']['CONTROL_ACK_HEAD'] = 'wrong' },
    lambda { |w| w['concurrency']['cancel-in-progress'] = true },
    lambda { |w| w['permissions']['contents'] = 'write' },
-   lambda { |w| w['jobs']['compile']['steps'][6]['run'] = "set -euo pipefail\nadb reboot\n" }].each do |change|
+   lambda { |w| w['jobs']['compile']['steps'][6]['run'] = "set -euo pipefail\nadb reboot\n" },
+   lambda { |w| w['jobs']['compile']['steps'][6]['run'].sub!('check-stock-release-banner.py', 'wrong-checker.py') }].each do |change|
     candidate = Marshal.load(Marshal.dump(workflow)); change.call(candidate)
     begin
       validate_build(candidate)
@@ -63,5 +65,5 @@ if __FILE__ == $0
     end
     raise 'negative compiled-audit gate did not reject'
   end
-  puts 'PASS: composed DMA build pins, completed controls, serial audit, ABI/config gates and no installer/device; four negative gates'
+  puts 'PASS: composed DMA build pins, completed controls, serial audit, ABI/config/release gates and no installer/device; five negative gates'
 end
