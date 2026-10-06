@@ -152,7 +152,7 @@ Preparação/decompilação `--scope dmabuf` gera somente dez funções DMA + on
 |unmap_page_range|Bit39 + huge: zap para 2MiB completos; split em trecho parcial; caso contrário continua PTE|560 casos ARM64, rota DMA/genérica, PTEs vazias e retry com tabela desaparecendo; PMD helpers/locks/flush modelados|
 |move_page_tables|Bit39 + huge: tenta move para 2MiB completos; split se parcial/move falha|480 casos ARM64 na rota DMA, retorno parcial e notifier order; PMD helpers/alloc/notifiers modelados|
 |vma_expand/vma_shrink|Seleciona adjust DMA em vez de adjust THP com bit39; antes de mudar start/end|48 casos ARM64 sem VMA adjacente, routing/order/bounds e -ENOMEM; maple/locks/adjust modelados|
-|__split_vma|Adjust DMA com limite novo antes de mudar VMA|Pseudocódigo/callsite mapeados; diferencial caller pendente|
+|__split_vma|Adjust DMA com limite novo antes de mudar VMA|144 casos ARM64 + 4 guards, bounds/pgoff/seq e cleanup; dup/tree/locks/adjust modelados, vm_ops/file NULL|
 
 `dmabuf_huge_hooks.recovered.c` contém somente recipe do hook fork, não arquivo a instalar/exportar. `test-dmabuf-stock-fork-hook.py`: executa copy_page_range inteiro com PFNMAP forçando needs_copy e PGDs vazios, flag39 ligado/desligado no source/dest, seqs iguais/diferentes; compara clearing de ambas VMAs e split→locks. BTF valida campos/protótipo. Não testa cópia de PTE, split real ou concorrência/lifetime.
 
@@ -164,7 +164,11 @@ Primeiro fixture NULL-PTE manteve PMD estável: caller repetiu trecho até instr
 
 `dmabuf_huge_vma_hook.recovered.c`: recipe para seleção adjust DMA/THP, ambos adj_next=0, depois de vma_prepare e antes de mudar bounds. `test-dmabuf-stock-vma-hooks.py` executa vma_expand/vma_shrink inteiros com VMA adjacente NULL, seq igual/diferente, bit39 ligado/desligado, mudanças de start/end e falha preallocate: 48 casos. Confirma que expand faz lock antes de preallocate, shrink depois de preallocate com sucesso; adjust vê limites antigos. Shrink faz mas_store_prealloc antes de atualizar bounds; expand depois. Compara argumentos/order, vm_start/end/pgoff/lock_seq, retorno -ENOMEM e BTF layouts/protótipos. Maple-tree/locks/adjust modelados: sem merge/anon clone, split real, VMA lifetime ou concorrência.
 
-Recipes não instalados/exportados. Diferenciais callers não substituem testes encadeados com helpers reais, ownership/unwind, Kbuild/KMI e hardware. Próximos gaps: __split_vma, VMA adjacente/merge e sequência remap→move→split→zap.
+`test-dmabuf-stock-split-vma-hook.py` compara caller __split_vma inteiro contra C com recipe adjust existente: 144 casos (bit39, lock_seq, new_below, pontos de corte, sucesso/falhas dup/preallocate/anon clone) e 4 BUG guards fora/no limite VMA. Compara old/new vm_start/end/pgoff/lock_seq, retorno e ordem dos helpers com snapshots dos limites; BTF inclui vma_prepare.insert e assinatura completa. 36 sucessos, 36 falhas dup, 36 preallocate e 36 anon clone. Falha dup não chama free; preallocate free new; anon clone mas_destroy→free new. Sucesso new_below ajusta pgoff original e chama mas_find depois de vma_complete; sem new_below ajusta pgoff da duplicata e reduz end original. Ajuste DMA/THP recebe sempre old vm_start e corte, adj_next=0, antes de mudar original. vm_ops/file NULL: callbacks may_split/open e file refcount não cobertos. vm_area_dup/free, anon clone, tree/locks/adjust modelados; duplicata privada não prova allocador real, MMU/refcounts ou lifetime/SMP.
+
+Após incluir split-VMA, rerun de todos os diferenciais DMA acima (split com default 200), deposit/pmd_set e BTF unit tests passou. Somente fixtures/doc mudaram; recipes existentes preservados. Sem integração/flash.
+
+Recipes não instalados/exportados. Diferenciais callers não substituem testes encadeados com helpers reais, ownership/unwind, Kbuild/KMI e hardware. Próximos gaps: VMA adjacente/merge, callbacks/refcounts e sequência remap→move→split→zap.
 
 Regressão deste checkpoint: wrappers 3.000, range 500 + 24 prefixos, zap 1.000, split 200, remap PMD 216/PTE 360, move helper 768, fork 64, novos callers 1.088, deposit 7.200 passos, pmd_set_huge 3.000, BTF 3 unit tests, scope 3 unit tests e inventário Ghidra 21 saídas: todos passaram. Split 200 é o default nesta execução, não alegação de rerun dos 1.000 casos anteriores. Sem Kbuild, integração, build remoto ou device neste checkpoint.
 
