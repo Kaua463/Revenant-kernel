@@ -4,6 +4,7 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 import os
 import shutil
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -43,6 +44,13 @@ class Integration(unittest.TestCase):
                          (ROOT / 'tools/stock-recovery/runtime-audit/recovered-dma-audit.c').read_bytes())
         with self.assertRaises(ValueError):
             module.run(self.args)
+
+    def test_reference_inside_unrelated_git_repository(self):
+        # Runner reference is a subfolder of the workflow checkout; git apply
+        # must not silently filter paths against that unrelated Git prefix.
+        subprocess.run(['git', 'init', '-q', str(self.folder)], check=True)
+        report = module.run(self.args)
+        self.assertEqual(len(report['changes']), 6)
 
     def test_target_drift_no_write(self):
         (self.source / 'mm/memory.c').write_text('drift')

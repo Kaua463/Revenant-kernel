@@ -8,7 +8,10 @@ on:
       - .github/workflows/audit-rodin-dma-producer.yml
       - scripts/prepare-dmabuf-runtime-audit.py
       - scripts/test-dmabuf-runtime-integration.py
-      - tools/stock-recovery/runtime-audit/**
+      - tools/stock-recovery/runtime-audit/recovered-dma-audit.c
+      - tools/stock-recovery/runtime-audit/audit-map-contract.h
+      - tools/stock-recovery/runtime-audit/Kconfig
+      - tools/stock-recovery/runtime-audit/Makefile
 
 permissions:
   contents: read

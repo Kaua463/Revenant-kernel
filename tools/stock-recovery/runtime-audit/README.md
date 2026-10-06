@@ -75,3 +75,27 @@ python3 scripts/test-dmabuf-runtime-producer-source.py
 This is a source-policy check with negative mutations, **not compilation or
 semantic verification**. Host checks grant no installation/shipping approval;
 the new producer does not establish the original Xiaomi GPU activation route.
+
+Guest workload source: `guest-workload.c` requires explicit
+`--disposable-qemu-vm`, ARM64/4K and `linux,dummy-virt` DT compatible; refuses
+phones. It tests both producer devices: invalid/private/execute/overrun mmap
+rejection, two aliases, every data word, close(fd) with live mappings, fork
+shared-write visibility, child partial unmap, mremap, mprotect split/restore,
+MAYEXEC refusal, parent partial unmap, cross-CPU verification and concurrent
+reader on the surviving alias during other-VMA teardown. Final alias unmaps.
+This is **not yet executed in a guest**, does not verify final allocation-free
+count or fault-injected partial ENOMEM unwind, and does not prove all lifetimes.
+
+```sh
+python3 scripts/test-dmabuf-guest-data.py
+```
+
+This host ASan/UBSan oracle detects corruption at each of 1024 page boundaries.
+It does not emulate or access page tables. Separate `audit-rodin-dma-guest-source`
+workflow compiles Linux-native and static AArch64 workload and checks native
+refusal; it does not run QEMU, produce kernel artifacts or access a device.
+
+Pristine reference validation uses a temporary independent Git root so an
+unrelated workflow checkout cannot filter patch paths. Seven integration tests
+include that runner-specific regression. Canonical patch/path/hash gates remain
+unchanged.

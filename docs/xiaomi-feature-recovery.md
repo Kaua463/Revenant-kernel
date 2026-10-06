@@ -407,6 +407,33 @@ Não reiniciado/cancelado. Fix do parser composto será novo run serial; failure
 antigo preservado, não relabelado sucesso. Runtime/MMU/SMP/producer real ainda
 pendentes.
 
+### Workload de VM e referência isolada do checkout
+
+Produtor run 37426751994 terminou failure antes de Kbuild: canonical validator
+em runtime-reference (subpasta do Git checkout) recebeu git apply --numstat
+filtrado pelo prefix do repo pai e acusou patch path mismatch. Teste novo
+reference_inside_unrelated_git_repository reproduziu antes do fix. Preparador
+agora copia os mesmos 11 bytes pristine, recusando symlinks, para Git root
+temporário independente; validator canônico/path/hash intacto. Sete testes de
+integração passaram após fix; não altera recipe nem producer. Backprop proposta
+§B: reference subfolder ≠ Git root → isolated canonical validation + regression;
+SPEC não alterado sem aprovação. Build composto 37426905255 confirmado ativo.
+
+`guest-workload.c` fonte de workload real Linux ARM64 para QEMU virt: mmap
+shared PMD/PTE, alias/data, rejected mappings, close file com VMAs vivas, fork,
+partial unmap filho/pai, shared-write, mremap/mprotect split, non-exec guard,
+CPU affinity >=2 e leitor concorrente no alias sobrevivente até teardown final.
+Só RAM do produtor e DT técnico QEMU; recusa phone/architecture/page mismatch.
+Não foi compilado/executado em Linux neste checkpoint. Falta prova de free final,
+ENOMEM parcial, guest init/MMU/SMP completo, full lifetime e stock producer.
+
+Oráculo novo audit-data.h/test_audit_data.c passou host clang -Werror ASan/UBSan:
+1024 page corruptions detectadas, offsets/hole-tail/full range. Não é MMU
+emulada nem test guest. Workflow separado de source compile Linux/staticARM64
+preparado; YAML/Bash parseados, outputs só metadata/checksums/refusal, sem
+kernel/flash/runtime-success. Trigger do produtor reduzido aos quatro inputs
+reais, evitando recompilar kernel por mudanças futuras no workload userspace.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

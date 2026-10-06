@@ -5,6 +5,8 @@ import hashlib
 from importlib.machinery import SourceFileLoader
 import json
 from pathlib import Path
+import subprocess
+import tempfile
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,7 +36,18 @@ def regular_path(root, relative):
 
 def run(args):
     # Full canonical/recipe validation on pristine inputs, not trusting JSON alone.
-    validator.run(SimpleNamespace(source=args.ack_reference, overlay=args.overlay, apply_review=False))
+    # A reference nested inside the workflow checkout is NOT its Git root.
+    # git apply would filter paths using that unrelated prefix. Validate the
+    # same exact bytes in a fresh, disposable root; don't weaken path/hash gates.
+    with tempfile.TemporaryDirectory(prefix='dma-pristine-runtime-reference-') as temporary:
+        reference = Path(temporary)
+        subprocess.run(['git', 'init', '-q', str(reference)], check=True)
+        for name in validator.prepare.SOURCES:
+            data = regular_path(args.ack_reference, name).read_bytes()
+            target = reference / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        validator.run(SimpleNamespace(source=reference, overlay=args.overlay, apply_review=False))
     manifest = json.loads((args.overlay / 'manifest.json').read_text())
     expected = dict(manifest['sources'])
     expected.update({name: record['after'] for name, record in manifest['changes'].items()})

@@ -1,0 +1,56 @@
+name: Compile DMA guest workload (not kernel or runtime proof)
+on:
+  workflow_dispatch:
+  push:
+    branches: [dyperos-3.0.304]
+    paths:
+      - .github/workflows/audit-rodin-dma-guest-source.yml
+      - tools/stock-recovery/runtime-audit/guest-workload.c
+      - tools/stock-recovery/runtime-audit/audit-data.h
+      - tools/stock-recovery/runtime-audit/test_audit_data.c
+permissions:
+  contents: read
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross compiler
+        run: |
+          set -euo pipefail
+          while IFS= read -r apt_source; do
+            sudo rm -f "$apt_source"
+          done < <(sudo grep -RIl 'dl.google.com/linux/chrome' /etc/apt/sources.list.d || true)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+      - name: Compile native and ARM64 static workload
+        run: |
+          set -euo pipefail
+          mkdir guest-evidence
+          source_dir=tools/stock-recovery/runtime-audit
+          gcc -std=c11 -O1 -Wall -Wextra -Werror -pthread \
+            "$source_dir/guest-workload.c" -o guest-evidence/native-guest
+          aarch64-linux-gnu-gcc -std=c11 -O1 -Wall -Wextra -Werror -pthread -static \
+            "$source_dir/guest-workload.c" -o guest-evidence/arm64-guest
+          aarch64-linux-gnu-readelf -h guest-evidence/arm64-guest > guest-evidence/arm64-elf.txt
+          grep -q 'Machine:.*AArch64' guest-evidence/arm64-elf.txt
+          if guest-evidence/native-guest --disposable-qemu-vm > guest-evidence/native-refusal.txt 2>&1; then
+            echo 'ERROR: x86 host accepted by ARM64 guest gate' >&2
+            exit 1
+          fi
+          grep -q 'ARM64/4K VM required' guest-evidence/native-refusal.txt
+          python3 scripts/test-dmabuf-guest-data.py
+          shasum -a 256 "$source_dir/guest-workload.c" "$source_dir/audit-data.h" \
+            guest-evidence/arm64-guest > guest-evidence/checksums.txt
+          # No kernel, boot, QEMU execution or runtime-success claim in this job.
+      - name: Preserve source compile evidence only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dma-guest-source-${{ github.run_number }}
+          path: |
+            guest-evidence/arm64-elf.txt
+            guest-evidence/native-refusal.txt
+            guest-evidence/checksums.txt
+          if-no-files-found: warn
