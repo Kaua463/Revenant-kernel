@@ -94,8 +94,29 @@ rejection, two aliases, every data word, close(fd) with live mappings, fork
 shared-write visibility, child partial unmap, mremap, mprotect split/restore,
 MAYEXEC refusal, parent partial unmap, cross-CPU verification and concurrent
 reader on the surviving alias during other-VMA teardown. Final alias unmaps.
-This is **not yet executed in a guest**, does not verify final allocation-free
-count or fault-injected partial ENOMEM unwind, and does not prove all lifetimes.
+
+Partial ENOMEM preparation (not wired or executed yet):
+`prepare-dmabuf-fault-sites.py` takes the exact hash-pinned recovered
+`mm/huge_memory.c` and emits a separate copy with two audit-config-gated failure
+sites, immediately before deposited PMD-table allocation or PTE-table allocation.
+It preserves the rest of the source and never writes input/production overlay.
+`audit-fault-plan.h` supplies a bounded, task/mm-scoped, one-shot ordinal selector.
+Its caller must serialize arm/check/reset; it is not a concurrent allocator or
+an ENOMEM model. Host selector tests and generated-site preservation tests:
+
+```sh
+python3 scripts/test-dmabuf-audit-fault-plan.py
+python3 scripts/test-dmabuf-fault-sites.py
+```
+
+The generated audit file requires the real producer callback, serialization and
+guest assertions before compilation/execution. The existing VM run does not use
+these new sites. Actual partial-map publication, failed-mmap teardown, clean
+retry, memory accounting and final release remain unproven.
+The basic workload executed successfully in run 37428061875. That run does not
+verify final allocation-free count or fault-injected partial ENOMEM unwind and
+does not prove all lifetimes; the new final-release instrumentation has its own
+pending runtime gate.
 
 ```sh
 python3 scripts/test-dmabuf-guest-data.py
@@ -126,4 +147,5 @@ requires both device-case markers, guest and PID1 completion, no panic/BUG/Oops/
 warning, plus QEMU zero exit. Runner mock tests are **not VM execution**.
 Producer workflow now includes this runtime step with ephemeral binaries/archive;
 only logs/config/reports/tool versions are uploaded, never kernel or flash files.
-Until actual serial evidence passes, runtime remains unproven.
+Actual serial evidence from run 37428061875 proves the basic workload only;
+new or expanded gates require their own real execution evidence.

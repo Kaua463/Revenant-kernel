@@ -525,6 +525,29 @@ Fonte/pin/testes alterados; novo runtime ainda pendente. Mocks do parser não
 contam como VM execution. Nenhuma mudança do overlay instalável/ABI/interfaces;
 nenhum flash/celular. T20 permanece incompleta.
 
+### Checkpoint — preparação determinística de partial ENOMEM, não executada
+
+Enquanto run37492696088/head4a459b23a63ebbfe64a8f131e519100a266d7dca
+permanece Fetch pinned ACK/in_progress, preparados dois sites audit-only:
+antes pte_alloc_one no path PMD e antes pte_alloc_map_lock no path PTE,
+somente dentro de dmabuf_huge_remap_pfn_range. Gerador exige SHA do
+mm/huge_memory.c pós-overlay e preserva fora da função byte-for-byte;
+CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT guarda declaração e ambas as falhas.
+Não usa falha global de page allocator, não muda recipe/manifest shipping.
+Código gerado separado: outputs/stock-dma-fault-sites-20261006-v1.
+
+Novo audit-fault-plan.h: one-shot ordinal1/2, task+mm tokens exigidos,
+foreign task/mm não consome contador, estado serializado pelo caller.
+Host clang -Werror + ASan/UBSan passou; quatro testes do gerador passaram
+(drift/reaplicação/symlink/evidence-preservation/reversão exata dos sites).
+Prova somente seleção/preparação. Callback real/serialization no produtor,
+guest failed-mmap+retry assertions e partial-unwind runtime ainda pendentes.
+Não ligado a nenhum workflow/kernel; generated file **não compilável como
+audit completo sem callback** e não é candidato instalável. Próximo passo:
+armar ordinal2 em task atual, confirmar primeiro bloco publicado, ENOMEM
+propagado, syscall remove todas PTE/PMD parciais, retry limpo e final free.
+Stock producer activation e full MMU/lifecycle/hardware continuam abertos.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.
