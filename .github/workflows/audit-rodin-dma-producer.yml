@@ -13,6 +13,12 @@ on:
       - scripts/test-dmabuf-audit-fault-plan.py
       - scripts/test-dmabuf-audit-log-formats.py
       - scripts/test-dmabuf-runtime-integration.py
+      - scripts/prepare-dmabuf-address-overlay.py
+      - scripts/extract-dmabuf-address-selector.py
+      - scripts/test-dmabuf-address-overlay.py
+      - scripts/check-dmabuf-address-build.py
+      - scripts/test-dmabuf-address-build.py
+      - tools/stock-recovery/dmabuf_huge_address.recovered.c
       - scripts/run-dmabuf-vm-audit.py
       - scripts/test-dmabuf-vm-runner.py
       - scripts/build-dmabuf-vm-initramfs.py
@@ -113,6 +119,15 @@ jobs:
           python3 scripts/prepare-dmabuf-runtime-audit.py --source ws/common \
             --ack-reference runtime-reference --apply-review \
             --output dma-evidence/runtime-producer-source.json
+          python3 scripts/test-dmabuf-address-overlay.py
+          python3 scripts/test-dmabuf-address-build.py
+          python3 scripts/prepare-dmabuf-address-overlay.py \
+            --core ws/common/drivers/dma-buf/dma-buf.c --output runtime-address
+          git -C ws/common apply --check \
+            "$GITHUB_WORKSPACE/runtime-address/dmabuf-address-review.patch"
+          git -C ws/common apply \
+            "$GITHUB_WORKSPACE/runtime-address/dmabuf-address-review.patch"
+          cp runtime-address/manifest.json dma-evidence/address-overlay-manifest.json
           ws/common/scripts/config --file ws/common/arch/arm64/configs/dma_audit.fragment \
             --enable XIAOMI_DMABUF_RUNTIME_AUDIT
       - name: Compile audit kernel
@@ -133,6 +148,8 @@ jobs:
           python3 scripts/check-dmabuf-build.py --vmlinux "${binaries[@]}" \
             --config "${configs[@]}" --enabled '${{ matrix.enabled }}' \
             --output dma-evidence/providers.json
+          python3 scripts/check-dmabuf-address-build.py --vmlinux "${binaries[0]}" \
+            --output dma-evidence/address-selector-elf.json
           grep -x 'CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT=y' "${configs[0]}"
           python3 - "${binaries[0]}" <<'PY'
           import json, sys

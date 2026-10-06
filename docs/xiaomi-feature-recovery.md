@@ -671,6 +671,53 @@ testes passaram localmente. Pin produtor atualizado, overlay shipping intacto.
 Run37494587692 continua prova dos gates antigos, **não** deste novo accounting.
 Nova execução real necessária; T20 permanece ~, nenhum flash/dispositivo.
 
+### Checkpoint — accounting real aprovado; seletor DMA core recuperado
+
+Run37499127549, commit378e89a62283bc7ad79daab684003373fc96fa9a:
+compile/providers/QEMU success. Artefato dma-producer-compile-6 extraído em
+outputs/dma-producer-vm-37499127549/dma-producer-compile-6/dma-evidence.
+Config e serial reais revalidados pelo runner atual. Ambos modos registraram
+before32768→partial36864→retry32768; failure=null. ImageSHA
+85b47c0b4b19e57188881645b7e8b53b04ffe7962f7ef6850bb4e177c139f0e4;
+initramfsSHA1a5a5473b8411c0ef27e2fe25100b32f4c35f0779d4f5dc1b28bd5912f6142ed.
+Prova cobre selected second-allocation failure/unwind, não todos allocators.
+
+Nova lacuna real: stock dma_buf_fops+152 contém pointer0xffffffc0803bca3c
+para dma_buf_hugetlb_get_unmapped_area. BTF file_operations size264 confirma
+offset/prototype; mmap+88→dma_buf_mmap_internal, release+120→dma_buf_file_release.
+ACK core pinnedSHA81c6e69759857e3ba198f2b45b5b5634721119db0e181ed0fd6454f3cdc8fa1c
+nunca registra get_unmapped_area. Callback faltava no overlay original.
+extract-dmabuf-address-selector.py valida hashes/BTF/raw pointers; report
+outputs/stock-dma-address-selector-20261006-v1.json. Prefix672bytes termina
+em __stack_chk_fail; inferred span800 ≠ função ELF, alternatives não aplicadas.
+
+Reconstruction dmabuf_huge_address.recovered.c: mask0 abaixo64KiB,
+mask0xffff a partir64KiB, mask0x1fffff a partir2MiB; hint arredonda
+correspondentemente, MAP_FIXED mantém endereço bruto após length check.
+Topdown low=max(PAGE_SIZE,mmap_min_addr); fallback usa mm->mmap_base,
+não TASK_UNMAPPED_BASE genérico. Prev usa vm_end sem grow-up gap; preserve
+stock behavior, não alteração silenciosa. Compat bit22/tasksize0xfffff000
+e high-address arithmetic mantidos. pgoff/file ignorados pelo seletor stock.
+
+4050 differential cases passaram contra ARM64 exato: hint2516,
+allocator2368, fallback402. BTF task/mm/VMA/info offsets verificados;
+mmap_min_addr BSS modelado explicitamente. Lookup/allocator bodies modelados:
+prova outputs/helper arguments, não Maple-tree/allocator/MMU/SMP/lifetimes.
+RecipeSHA12bd968b8d17db819557094d43db1990fef0b50c3bf694e0fda398d0997c6878.
+
+prepare-dmabuf-address-overlay.py gera extensão de um arquivo, guarded por
+CONFIG_XIAOMI_DMABUF_HUGETLB default-off do overlay base, sem editar inputs.
+Patch-roundtrip/disabled-byte-preservation/anchors/provider-pointer tests
+passaram. Extensão outputs/stock-dma-address-overlay-20261006-v1 permanece
+REVIEW_ONLY_NOT_INSTALLABLE. Audit workflow passa a compilar extensão e
+verificar pointer no vmlinux; nova execução ainda necessária. Guest existente
+usa misc producer, portanto runtime dele não prova rota VFS DMA-BUF registrada.
+
+Ainda obrigatório: enabled/disabled Kbuild da extensão, real DMA-BUF exporter
+workload/core→ops->mmap, restantes failures/accounting/full lifecycle/MMU/SMP,
+root-composed runtime e hardware. Shipping overlay intacto, sem flash/device;
+T20 permanece ~. Este checkpoint supera apenas pendências antigas específicas.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.
