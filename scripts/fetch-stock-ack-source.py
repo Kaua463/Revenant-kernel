@@ -7,8 +7,8 @@ import re
 
 
 def validate_path(value):
-    # Explicit build-integration inputs for the pinned DMA MM overlay.
-    if value in ('mm/Kconfig','mm/Makefile'):
+    # Explicit integration/lifetime inputs for the pinned DMA MM audit.
+    if value in ('mm/Kconfig','mm/Makefile','kernel/fork.c'):
         return value
     path=PurePosixPath(value)
     if (path.is_absolute() or '..' in path.parts or path.as_posix()!=value or

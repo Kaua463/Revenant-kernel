@@ -63,6 +63,10 @@ def run(args):
     assert close_manifest['commit']=='f7ebe251035c0d15ff90c6a0a320697932785fad'
     assert hashlib.sha1(b'blob '+str(len(close_source)).encode()+b'\0'+close_source).hexdigest()==close_manifest['files']['mm/internal.h']['git_blob']
     assert b'vma->vm_ops = &vma_dummy_vm_ops;' in close_source
+    free_source=(args.free_source/'kernel/fork.c').read_bytes();free_manifest=json.loads((args.free_source/'manifest.json').read_text())
+    assert hashlib.sha256(free_source).hexdigest()=='36d67fea8bd50ed0ee3416a110d39e3332f81ba81f002ebb9b8ec718f81bc395'
+    assert free_manifest['commit']=='f7ebe251035c0d15ff90c6a0a320697932785fad'
+    assert hashlib.sha1(b'blob '+str(len(free_source)).encode()+b'\0'+free_source).hexdigest()==free_manifest['files']['kernel/fork.c']['git_blob']
     # Bounded inlined remove_vma block, NOT the whole exit_mmap. Its caller has
     # already unmapped the VMA and established unreachability; those conditions
     # and x22/x25 live-in registers are explicit fixture preconditions.
@@ -71,7 +75,7 @@ def run(args):
     assert hashlib.sha256(image[close_entry-kernel.base:close_end-kernel.base]).hexdigest()=='67980becd27b68fd4f0ea17f5393b8876919bee3b216c69d5cb802f528041345'
     dummy_ops=kernel.address('vma_dummy_vm_ops')
     assert image[dummy_ops-kernel.base:dummy_ops-kernel.base+144]==bytes(144)
-    for name,required in {'vm_area_struct':{'vm_start':0,'vm_end':8,'vm_mm':16,'vm_flags':32,'vm_lock_seq':44,'vm_lock':48,'vm_pgoff':120,'vm_ops':112,'vm_file':128},'mm_struct':{'mm_lock_seq':224},'ma_state':{'index':8,'last':16,'node':24},'vma_prepare':{'vma':0,'insert':40},'vm_operations_struct':{'open':0,'close':8,'may_split':16},'file':{'f_count':24,'f_mapping':232}}.items():
+    for name,required in {'vm_area_struct':{'vm_start':0,'vm_end':8,'vm_mm':16,'vm_flags':32,'vm_lock_seq':44,'vm_lock':48,'vm_pgoff':120,'vm_ops':112,'vm_file':128,'anon_name':144},'mm_struct':{'mm_lock_seq':224},'ma_state':{'index':8,'last':16,'node':24},'vma_prepare':{'vma':0,'insert':40},'vm_operations_struct':{'open':0,'close':8,'may_split':16},'file':{'f_count':24,'f_mapping':232}}.items():
         ident=next(i for i,t in enumerate(kernel.btf.types) if t['kind']==4 and t['name']==name);found=fields(kernel.btf,ident)
         for member,offset in required.items():assert found[member]==offset
     func=next(t for t in kernel.btf.types if t['kind']==12 and t['name']=='__split_vma');proto=kernel.btf.types[func['size']]
@@ -80,6 +84,10 @@ def run(args):
         typ=kernel.btf.types[proto['raw'][i*2+1]]
         if i<2:assert typ['kind']==2;typ=kernel.btf.types[typ['size']]
         assert typ['name']==name
+    for name in ('__vm_area_free',):
+        fn=next(t for t in kernel.btf.types if t['kind']==12 and t['name']==name);signature=kernel.btf.types[fn['size']]
+        assert signature['kind']==13 and signature['size']==0 and len(signature['raw'])==2
+        pointer=kernel.btf.types[signature['raw'][1]];assert pointer['kind']==2 and kernel.btf.types[pointer['size']]['name']=='vm_area_struct'
     vmops_type=next(t for t in kernel.btf.types if t['kind']==4 and t['name']=='vm_operations_struct')
     for offset,result_name,arg_names in ((0,None,('vm_area_struct',)),(8,None,('vm_area_struct',)),(16,'int',('vm_area_struct','unsigned long'))):
         member=next(vmops_type['raw'][i+1] for i in range(0,len(vmops_type['raw']),3) if vmops_type['raw'][i+2]==offset*8)
@@ -97,10 +105,16 @@ def run(args):
         uc=Uc(UC_ARCH_ARM64,UC_MODE_ARM);uc.mem_map(kernel.base,(len(image)+4095)&~4095);uc.mem_write(kernel.base,image)
         ram=0x1000000;uc.mem_map(ram,0x20000);vma=ram;mm=ram+0x1000;iterator=ram+0x2000;sem=ram+0x3000;task=ram+0x4000;new=ram+0x5000;newsem=ram+0x6000;stack=ram+0xf000;stop=ram+0x10000
         vmops=ram+0x7000;file=ram+0x8000;may=ram+0x11004;opened=ram+0x12004;closed=ram+0x13004
+        lock_cache=ram+0xa000;vma_cache=ram+0xb000;cache_pages=set()
+        for name,value in (('vma_lock_cachep',lock_cache),('vm_area_cachep',vma_cache)):
+            address=kernel.address(name);assert kernel.symbols[name][0][1] in ('b','B') and kernel.span(name) is None
+            page=address&~4095;assert page>=kernel.base+((len(image)+4095)&~4095)
+            if page not in cache_pages:uc.mem_map(page,4096);cache_pages.add(page)
+            uc.mem_write(address,struct.pack('<Q',value))
         # Exact CFI type tags checked by this stock caller before its BLR.
         uc.mem_write(may-4,struct.pack('<I',0xc839c7f3));uc.mem_write(opened-4,struct.pack('<I',0x6b80e497));uc.mem_write(closed-4,struct.pack('<I',0x6b80e497))
         names=('vm_area_dup','mas_preallocate','anon_vma_clone','mas_destroy','vm_area_free','down_write','up_write','vma_prepare','vma_adjust_dmabuf_huge','vma_adjust_trans_huge','vma_complete','mas_find','split_pad_vma')
-        ops={kernel.address(name):i for i,name in enumerate(names)};ops.update({may:13,opened:14,closed:15,kernel.address('__vm_area_free'):16});trace=[];state={};counts={i:0 for i in range(18)}
+        ops={kernel.address(name):i for i,name in enumerate(names)};ops.update({may:13,opened:14,closed:15,kernel.address('__vm_area_free'):16,kernel.address('kmem_cache_free'):18});trace=[];state={};counts={i:0 for i in range(19)}
         def hook(emu,address,size,user):
             if address in ops:
                 op=ops[address];x=[emu.reg_read(r) for r in (UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3)];a,b,c=x[:3];result=0
@@ -115,12 +129,18 @@ def run(args):
                 elif op==13:assert [a,b]==[vma,state['addr']];c=0;result=(1<<64)-16 if state['callbacks']==3 else 0
                 elif op==14:assert a==new;b=c=0
                 elif op in (15,16):assert state['closing'] and a==new;b=c=0
+                elif op==18:
+                    assert state['closing'] and a in (lock_cache,vma_cache)
+                    assert b==(newsem if a==lock_cache else new) and b not in state['freed'];c=0
+                    state['freed'].append(b)
                 bounds=struct.unpack('<2Q',emu.mem_read(vma,16))+struct.unpack('<2Q',emu.mem_read(new,16));refcount=struct.unpack('<Q',emu.mem_read(file+24,8))[0];trace.append((op,a,b,c,*bounds,refcount))
                 if op==0:
                     if state['fail']!=1:emu.mem_write(new,bytes(emu.mem_read(vma,208)));emu.mem_write(new+48,struct.pack('<Q',newsem));result=new
                 elif op==1:result=1 if state['fail']==2 else 0
                 elif op==2:result=(1<<64)-22 if state['fail']==3 else 0
-                emu.reg_write(UC_ARM64_REG_X0,result);emu.reg_write(UC_ARM64_REG_PC,emu.reg_read(UC_ARM64_REG_X30))
+                # Tap __vm_area_free entry without replacing its body. Only
+                # kmem_cache_free is a modeled allocator boundary.
+                if op!=16:emu.reg_write(UC_ARM64_REG_X0,result);emu.reg_write(UC_ARM64_REG_PC,emu.reg_read(UC_ARM64_REG_X30))
             elif address==kernel.address('fput'):
                 assert state['closing'] and emu.reg_read(UC_ARM64_REG_X0)==file
                 bounds=struct.unpack('<2Q',emu.mem_read(vma,16))+struct.unpack('<2Q',emu.mem_read(new,16))
@@ -134,7 +154,7 @@ def run(args):
             uc.mem_write(file,bytes(264));uc.mem_write(file+24,struct.pack('<Q',17));uc.mem_write(file+232,struct.pack('<Q',ram+0x9000))
             uc.mem_write(vmops,struct.pack('<3Q',opened if callbacks>=2 else 0,closed,may if callbacks>=2 else 0))
             uc.mem_write(vma+112,struct.pack('<Q',vmops if callbacks else 0));uc.mem_write(vma+128,struct.pack('<Q',file if has_file else 0))
-            trace.clear();state.update(addr=addr,below=below,fail=fail,callbacks=callbacks,closing=False,bug=False)
+            trace.clear();state.update(addr=addr,below=below,fail=fail,callbacks=callbacks,closing=False,freed=[],bug=False)
             for r,v in zip((UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3),(iterator,vma,addr,below)):uc.reg_write(r,v)
             uc.reg_write(UC_ARM64_REG_X30,stop);uc.reg_write(UC_ARM64_REG_SP,stack);uc.reg_write(UC_ARM64_REG_SP_EL0,task)
         for dma in (0,1):
@@ -157,16 +177,17 @@ def run(args):
                 for row in trace:counts[row[0]]+=1
                 if actual[8]==0:
                     # Same actual duplicate and file buffers produced above.
-                    # Close/free callback bodies modeled; inlined close routing
-                    # and fput body execute, including vm_ops poisoning.
+                    # Close callback and allocator modeled; inlined close,
+                    # fput and __vm_area_free execute, including ops poisoning.
                     expected_file=bytearray(uc.mem_read(file,264));struct.pack_into('<Q',expected_file,24,17)
                     before_close=len(trace);state['closing']=True
                     uc.reg_write(UC_ARM64_REG_X22,new);uc.reg_write(UC_ARM64_REG_X25,dummy_ops);uc.reg_write(UC_ARM64_REG_SP,stack)
                     uc.emu_start(close_entry,close_end,count=10000)
                     assert uc.reg_read(UC_ARM64_REG_PC)==close_end and not state['bug']
                     assert bytes(uc.mem_read(file,264))==bytes(expected_file)
-                    wanted=([15] if callbacks else [])+([17] if has_file else [])+[16]
+                    wanted=([15] if callbacks else [])+([17] if has_file else [])+[16,18,18]
                     assert [row[0] for row in trace[before_close:]]==wanted
+                    assert state['freed']==[newsem,new]
                     expected_ops=dummy_ops if callbacks else 0
                     assert struct.unpack('<Q',uc.mem_read(new+112,8))[0]==expected_ops
                     for row in trace[before_close:]:counts[row[0]]+=1
@@ -190,8 +211,8 @@ def run(args):
         assert all(counts.values()),counts
         assert returned_file_refs==108 and closed_vmas==216
         print(f'PASS: {case} ARM64 split-VMA cases + 4 boundary BUG guards + 3 callback CFI guards + {closed_vmas} close blocks/{returned_file_refs} same-object stock fput returns; routes={counts}')
-        print('Bounded exit_mmap close block executes close→dummy ops→fput→free routing on actual duplicate; original 17 file holders preserved. Whole exit_mmap/unmap/unreachability and callback/free/tree/lock bodies modeled or assumed; no MMU/SMP/destructor/complete lifetime proof.')
+        print('Bounded close→dummy ops→fput→__vm_area_free executes on actual duplicate; 17 file holders preserved, lock then VMA returned once to modeled slab allocator. anon_name NULL. Whole exit_mmap/unmap/unreachability and callback/allocator/tree/locks modeled or assumed; no MMU/SMP/destructor/complete lifetime proof.')
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--symbols',type=Path,required=True);p.add_argument('--close-source',type=Path,required=True);run(p.parse_args())
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--symbols',type=Path,required=True);p.add_argument('--close-source',type=Path,required=True);p.add_argument('--free-source',type=Path,required=True);run(p.parse_args())

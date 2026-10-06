@@ -314,6 +314,12 @@ ACK mm/internal.h obtido/verificado no pin f7ebe251: Git blob e66cb4774ccc9e90c2
 
 Callback body/free helper, unreachability e estruturas/locks/tree são modelos ou precondições; **não comprova close de produtor real, liberação final de backing buffer, MMU/SMP/concurrency nem ciclo completo do exit_mmap**. Nenhuma receita ou produção modificada; somente validação, referências públicas e documentação.
 
+### Corpo real __vm_area_free no encadeamento
+
+Fixture split/close deixa de substituir __vm_area_free: executa seu corpo ARM64 stock sobre as 216 duplicatas produzidas pelo split, após close/fput. Valida BTF void(VMA*) e anon_name offset 144 (NULL neste conjunto). Dois globals BSS vm_area_cachep/vma_lock_cachep são mapeados como contexto privado explícito, com tokens de cache, após conferir símbolo b/B e ausência de span file-backed; não são dados runtime extraídos do Image. Somente kmem_cache_free é interceptado como fronteira do alocador. 432 liberações: por duplicata, cache lock recebe newsem primeiro; cache VMA recebe new depois, ambos uma vez. Cada token/pointer/order e ausência de duplicate free verificados. Header/body/code fonte ACK kernel/fork.c obtido via allowlist **somente desse arquivo adicional**, não diretório kernel irrestrito: blob 59c01d18581299337f251d3fdfd2a091b3376250, SHA256 36d67fea8bd50ed0ee3416a110d39e3332f81ba81f002ebb9b8ec718f81bc395 no pin f7ebe251, em `outputs/stock-ack-dma-vma-free-reference-20261006`. Fetch negatives continuam rejeitando kernel/Makefile e kernel/sched/core.c.
+
+Novo input obrigatório `--free-source` aponta essa referência, além de --close-source/Image/symbols. 1.152 split inputs, 4 boundary/3 CFI guards, 216 close/__vm_area_free sequências e 108 fput reais passaram; 432 chamadas ao slab modelado. Fonte preserva vma_lock_free antes de kmem_cache_free(VMA). anon_name não-NULL, slab allocator real, VM reachability, exit_mmap inteiro, MMU/SMP e backing buffer lifetime **não comprovados**. Recipes/produção não alteradas.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.
