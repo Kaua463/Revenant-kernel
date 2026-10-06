@@ -14,6 +14,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "audit-data.h"
+#include "audit-export-contract.h"
 
 #define BLOCK (2UL * 1024 * 1024)
 #define BYTES (2 * BLOCK)
@@ -219,6 +220,101 @@ static void exercise(const char *device, int inject)
 	       atomic_load_explicit(&reader.passes, memory_order_relaxed));
 }
 
+static void exercise_export(unsigned int mode)
+{
+	const size_t lengths[] = {4096, 65536, BLOCK, BYTES};
+	void *mappings[4], *target, *moved;
+	int factory, fd, fd_flags, status;
+	pid_t child;
+	unsigned int attempt;
+
+	factory = open("/dev/recovered-dma-export-audit", O_RDWR | O_CLOEXEC);
+	if (factory < 0 || ioctl(factory, DMA_AUDIT_EXPORT_LIVE, 0) != 0)
+		fail("export factory baseline");
+	errno = 0;
+	if (ioctl(factory, DMA_AUDIT_EXPORT_PMD, 1) != -1 || errno != EINVAL)
+		fail("export nonzero argument accepted");
+	errno = 0;
+	if (ioctl(factory, _IO('D', 0x43), 0) != -1 || errno != EINVAL)
+		fail("export unknown command accepted");
+	fd = ioctl(factory, mode ? DMA_AUDIT_EXPORT_PTE : DMA_AUDIT_EXPORT_PMD, 0);
+	if (fd < 0)
+		fail("export fd installation");
+	fd_flags = fcntl(fd, F_GETFD);
+	if (fd_flags < 0 || !(fd_flags & FD_CLOEXEC) ||
+	    ioctl(factory, DMA_AUDIT_EXPORT_LIVE, 0) != 1)
+		fail("export fd ownership/CLOEXEC");
+	errno = 0;
+	if (mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, BYTES) != MAP_FAILED || errno != EINVAL)
+		fail("export core extent bound");
+	for (size_t index = 0; index < 4; ++index) {
+		uintptr_t mask = lengths[index] >= BLOCK ? BLOCK - 1 :
+				 lengths[index] >= 65536 ? 65535 : 4095;
+		uintptr_t hint = index == 1 ? UINT64_C(0x20001000) :
+				 index == 2 ? UINT64_C(0x40001000) : 0;
+		mappings[index] = mmap((void *)hint, lengths[index], PROT_READ | PROT_WRITE,
+				       MAP_SHARED, fd, 0);
+		if (mappings[index] == MAP_FAILED || ((uintptr_t)mappings[index] & mask) ||
+		    (hint && (uintptr_t)mappings[index] != ((hint + mask) & ~mask)))
+			fail("DMA-BUF selector alignment");
+		printf("DMA_EXPORT_ALIGN mode=%u bytes=%zu mask=%lu aligned=1 hint_checked=%u\n",
+		       mode, lengths[index], (unsigned long)mask, (unsigned int)!!hint);
+	}
+	for (size_t index = 0; index < BYTES / sizeof(uint64_t); ++index)
+		if (((volatile uint64_t *)mappings[3])[index])
+			fail("export RAM not zeroed");
+	audit_fill(mappings[3], BYTES, SEED);
+	for (size_t index = 0; index < 4; ++index)
+		verify(mappings[index], 0, lengths[index]);
+	if (close(fd) || ioctl(factory, DMA_AUDIT_EXPORT_LIVE, 0) != 1)
+		fail("DMA-BUF backing lost after close fd");
+	errno = 0;
+	if (!mprotect(mappings[3], BYTES, PROT_READ | PROT_EXEC) || errno != EACCES)
+		fail("export MAYEXEC guard");
+	child = fork();
+	if (child < 0)
+		fail("export fork");
+	if (!child) {
+		verify(mappings[3], 0, BYTES);
+		if (munmap((char *)mappings[3] + BLOCK, 4096))
+			fail("export child partial unmap");
+		((volatile uint64_t *)mappings[2])[0] ^= 9;
+		_exit(0);
+	}
+	if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status))
+		fail("export child result");
+	if (((volatile uint64_t *)mappings[3])[0] != (audit_word(0, SEED) ^ 9))
+		fail("export fork shared write");
+	((volatile uint64_t *)mappings[3])[0] ^= 9;
+	target = reservation(BYTES);
+	moved = mremap(mappings[3], BYTES, BYTES, MREMAP_MAYMOVE | MREMAP_FIXED, target);
+	if (moved != target)
+		fail("export moved mapping");
+	migrate_and_verify(moved);
+	for (size_t index = 0; index < 3; ++index) {
+		verify(mappings[index], 0, lengths[index]);
+		if (munmap(mappings[index], lengths[index]))
+			fail("export alias teardown");
+	}
+	if (ioctl(factory, DMA_AUDIT_EXPORT_LIVE, 0) != 1)
+		fail("export lifetime before last unmap");
+	verify(moved, 0, BYTES);
+	printf("DMA_EXPORT_LAST_UNMAP mode=%u\n", mode);
+	if (munmap(moved, BYTES))
+		fail("export last mapping teardown");
+	for (attempt = 0; attempt < 500; ++attempt) {
+		int live = ioctl(factory, DMA_AUDIT_EXPORT_LIVE, 0);
+		if (live < 0 || live > 1)
+			fail("export live counter invalid");
+		if (!live)
+			break;
+		usleep(1000);
+	}
+	if (attempt == 500 || close(factory))
+		fail("export final release timeout");
+	printf("DMA_EXPORT_CASE_PASS mode=%u live=0\n", mode);
+}
+
 int main(int argc, char **argv)
 {
 	struct utsname name;
@@ -241,6 +337,8 @@ int main(int argc, char **argv)
 	exercise("/dev/recovered-dma-audit-pte", 0);
 	exercise("/dev/recovered-dma-audit-fault-pmd", 1);
 	exercise("/dev/recovered-dma-audit-fault-pte", 1);
+	exercise_export(0);
+	exercise_export(1);
 	puts("DMA_GUEST_PASS: basic mmap/fork/move/split/lifetime/SMP workload only");
 	return 0;
 }

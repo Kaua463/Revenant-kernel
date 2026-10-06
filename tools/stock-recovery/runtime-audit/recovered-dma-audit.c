@@ -56,6 +56,25 @@ extern atomic64_t dmabuf_hugetlb_contpte_map;
 
 /* Built-in audit link only, not exported or available in shipping kernels. */
 bool recovered_dma_audit_fail_alloc(struct mm_struct *mm, unsigned int map_type);
+int recovered_dma_audit_plain_remap(struct vm_area_struct *vma,
+		unsigned long pfn, unsigned int map_type);
+
+/* CPU-only DMA-BUF exporter shares the scoped fault-site mutex. The caller
+ * validates owned extent and empty destination before reaching this helper.
+ * No global allocator fault can leak into another audit mapping.
+ */
+int recovered_dma_audit_plain_remap(struct vm_area_struct *vma,
+		unsigned long pfn, unsigned int map_type)
+{
+	int result;
+
+	mmap_assert_write_locked(vma->vm_mm);
+	mutex_lock(&audit_fault_mutex);
+	result = dmabuf_huge_remap_pfn_range(vma, vma->vm_start, pfn,
+			vma->vm_end - vma->vm_start, vma->vm_page_prot, map_type);
+	mutex_unlock(&audit_fault_mutex);
+	return result;
+}
 
 static bool audit_first_block_present(unsigned int map_type)
 {

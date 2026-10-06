@@ -65,7 +65,9 @@ def validate(source, config, makefile):
         raise ValueError('use of buffer after free')
     if 'default n' not in config or '\tbool ' not in config or 'tristate' in config:
         raise ValueError('audit must default off and be built-in')
-    if makefile.splitlines()[-1] != 'obj-$(CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT) += recovered-dma-audit.o':
+    expected_objects = ['obj-$(CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT) += recovered-dma-audit.o',
+                        'obj-$(CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT) += recovered-dma-export-audit.o']
+    if [line for line in makefile.splitlines() if line and not line.startswith('#')] != expected_objects:
         raise ValueError('unexpected build scope')
 
 

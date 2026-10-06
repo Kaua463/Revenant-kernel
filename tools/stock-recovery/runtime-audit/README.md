@@ -178,3 +178,31 @@ Producer workflow now includes this runtime step with ephemeral binaries/archive
 only logs/config/reports/tool versions are uploaded, never kernel or flash files.
 Actual serial evidence from run 37428061875 proves the basic workload only;
 new or expanded gates require their own real execution evidence.
+# Real DMA-BUF route extension (runtime pending)
+
+`recovered-dma-export-audit.c` adds a built-in, default-off, root-only VM
+factory. Fixed `_IO` commands create a 4 MiB zeroed, file-owned DMA-BUF in
+PMD/PTE mode; one command reports only the live-buffer count. No pointer,
+PFN, address, size, read/write/dump interface. At most eight live buffers.
+This interface is test instrumentation, never part of the shipping overlay.
+
+Export uses the real DMA-BUF framework and fd installation. Its SG map/unmap
+callbacks use owned pages and normal DMA API, but physical DMA attachments
+are **not** tested by this CPU-mapping workload. Export/error/fd-failure paths
+release ownership rather than forcing framework validation.
+
+Guest tests 4K/64K/2M/4M mappings, deliberately unaligned hints for 64K/2M,
+core extent rejection, shared aliases, fd-close retention, fork/shared writes,
+partial child unmap, full mremap, CPU migration and final-unmap release.
+Small maps use normal `remap_pfn_range`; 2M/4M use the recovered mapper.
+Only the recovered mapper is fault-site-instrumented; the new plain route
+shares its mutex so scoped injection cannot leak into an unrelated remap.
+
+The runner requires all core/export events and matching allocation/release
+IDs. Live count must remain one with mappings and become zero only after the
+actual backing frees. Queries have a bounded 500 ms release wait; timeout
+fails, never silently treats an outstanding DMA-BUF as released.
+
+New guards do not retroactively validate old VM logs. Builds before this
+extension have no exporter/core-route runtime proof. Source-policy tests,
+format compilation and mocked runner tests remain distinct from real QEMU.

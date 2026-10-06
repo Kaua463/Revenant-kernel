@@ -7,6 +7,7 @@ on:
       - .github/workflows/audit-rodin-dma-guest-source.yml
       - tools/stock-recovery/runtime-audit/guest-workload.c
       - tools/stock-recovery/runtime-audit/audit-data.h
+      - tools/stock-recovery/runtime-audit/audit-export-contract.h
       - tools/stock-recovery/runtime-audit/test_audit_data.c
       - tools/stock-recovery/runtime-audit/guest-init.c
       - scripts/build-dmabuf-vm-initramfs.py

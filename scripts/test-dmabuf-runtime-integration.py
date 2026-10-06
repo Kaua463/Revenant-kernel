@@ -36,7 +36,7 @@ class Integration(unittest.TestCase):
         before = (self.source / 'mm/Kconfig').read_bytes()
         huge_before = (self.source / 'mm/huge_memory.c').read_bytes()
         report = module.run(self.args)
-        self.assertEqual(len(report['changes']), 8)
+        self.assertEqual(len(report['changes']), 10)
         self.assertEqual((self.source / 'mm/Kconfig').read_bytes(), before)
         self.assertEqual((self.source / 'mm/huge_memory.c').read_bytes(), huge_before)
         self.assertFalse((self.source / 'mm/recovered-dma-audit').exists())
@@ -54,7 +54,7 @@ class Integration(unittest.TestCase):
         # must not silently filter paths against that unrelated Git prefix.
         subprocess.run(['git', 'init', '-q', str(self.folder)], check=True)
         report = module.run(self.args)
-        self.assertEqual(len(report['changes']), 8)
+        self.assertEqual(len(report['changes']), 10)
 
     def test_target_drift_no_write(self):
         (self.source / 'mm/memory.c').write_text('drift')

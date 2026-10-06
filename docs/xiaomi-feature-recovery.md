@@ -718,6 +718,44 @@ workload/core→ops->mmap, restantes failures/accounting/full lifecycle/MMU/SMP,
 root-composed runtime e hardware. Shipping overlay intacto, sem flash/device;
 T20 permanece ~. Este checkpoint supera apenas pendências antigas específicas.
 
+### Checkpoint — exportador DMA-BUF real preparado; runtime ainda pendente
+
+Produtor misc antigo não exercita dma_buf_fops nem dma_buf_ops. Novo
+recovered-dma-export-audit.c usa dma_buf_export/dma_buf_fd e owned4MiB
+zerados; factory0600 CAP_SYS_ADMIN em open/ioctl, dois fixed _IO selectors
+PMD/PTE + live-counter-only query. Rejeita arg!=0/unknown command; max8bufs.
+Sem user pointer/PFN/tamanho/MMIO/read/write interface. SG map/unmap usa
+owned pages + DMA API real, não valida anexação/DMA físico nesta carga CPU.
+Export failure libera pages/struct/count; fd failure usa dma_buf_put;
+release log e live decrement ocorrem depois de ambos frees. Não shipping.
+
+Plain remap do exportador compartilha audit_fault_mutex com produtor antigo:
+instrumentação ENOMEM task/mm scoped não pode vazar para outro remap.
+Kconfig audit permanece built-in/default-n e agora depende DMA_SHARED_BUFFER.
+Source integrator pinna sete inputs; dez paths totais no disposable tree,
+overlay de produção/base segue intacto. Symbols audit novos namespaced.
+
+Guest ampliado: real DMA-BUF 4K/64K/2M/4M mmaps, hints0x20001000/0x40001000
+devem retornar endereços arredondados exatos (não alinhamento acidental),
+CLOEXEC, core extent rejection, zeroed RAM/full-data alias checks,
+close-fd retention, fork/shared write/child partial unmap, mremap/SMP,
+querylive1 até lastunmap e live0 após real frees, wait limitado500ms.
+Small maps usam generic remap_pfn_range;2M/4M mapper recuperado.
+
+Runner agora exige oito exporter mmap/align events e duas alloc/release
+identities com last-unmap ordering; missing/wrong-id/mask/hint/result/live/order
+falham. Não aplicar novo runner como prova a serial antigo sem esses eventos.
+Source/format/fixture/integration/mock gates passaram; novo Kbuild e QEMU
+continuam pendentes. Run37511000979 pertence ao commit anterior07f49af,
+não contém este exportador. Nenhum dispositivo/flash; T20 continua ~.
+
+Revisão/backprop local: bit-test direto de fcntl(F_GETFD) aceitaria -1 como
+CLOEXEC porque todos bits ligados. Guest agora rejeita fd_flags<0 antes do
+bit-test; regressão C compilada executa -1/0/FD_CLOEXEC. Classe(a) bug no
+próprio novo teste, não ABI/spec alterados; proposta §B futura: false-CLOEXEC
+pass por unchecked syscall return, sob V35 evidence-not-inferred. SPEC não
+amendada sem aprovação; registro/correção local não pausa implementação.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

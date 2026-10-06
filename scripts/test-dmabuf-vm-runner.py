@@ -23,6 +23,16 @@ def mock_pass():
         lines.extend((f'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-{device}',
                       f'DMA_AUDIT_RELEASE id={identity} mode={mode}',
                       f'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-{device} reader_passes=1'))
+    for mode in (0,1):
+        identity = mode + 1
+        lines.append(f'DMA_EXPORT_ALLOC id={identity} mode={mode} bytes=4194304')
+        for length,mask,huge,hint in ((4096,4095,0,0),(65536,65535,0,1),
+                                      (2097152,2097151,1,1),(4194304,2097151,1,0)):
+            lines.append(f'DMA_EXPORT_MMAP id={identity} mode={mode} bytes={length} offset=0 huge={huge} result=0')
+            lines.append(f'DMA_EXPORT_ALIGN mode={mode} bytes={length} mask={mask} aligned=1 hint_checked={hint}')
+        lines.extend((f'DMA_EXPORT_LAST_UNMAP mode={mode}',
+                      f'DMA_EXPORT_RELEASE id={identity} mode={mode}',
+                      f'DMA_EXPORT_CASE_PASS mode={mode} live=0'))
     return '\n'.join(lines + ['DMA_GUEST_PASS: basic tests', 'DMA_VM_RESULT_PASS: finished'])
 
 
@@ -30,6 +40,23 @@ PASS = mock_pass()
 
 
 class Runner(unittest.TestCase):
+    def test_export_core_events_fail_closed(self):
+        mutations = (
+            PASS.replace('DMA_EXPORT_RELEASE id=1 mode=0\n',''),
+            PASS.replace('DMA_EXPORT_ALLOC id=2','DMA_EXPORT_ALLOC id=1'),
+            PASS.replace('offset=0 huge=1 result=0','offset=0 huge=1 result=-12',1),
+            PASS.replace('mask=65535','mask=4095',1),
+            PASS.replace('hint_checked=1','hint_checked=0',1),
+            PASS.replace('DMA_EXPORT_CASE_PASS mode=0 live=0','DMA_EXPORT_CASE_PASS mode=0 live=1'),
+            PASS.replace('DMA_EXPORT_LAST_UNMAP mode=0\nDMA_EXPORT_RELEASE id=1 mode=0',
+                         'DMA_EXPORT_RELEASE id=1 mode=0\nDMA_EXPORT_LAST_UNMAP mode=0'),
+            PASS.replace('DMA_EXPORT_MMAP id=1 mode=0 bytes=65536','DMA_EXPORT_MMAP id=2 mode=0 bytes=65536'),
+            PASS+'\nDMA_EXPORT_ALIGN mode=0 bytes=65536 mask=65535 aligned=1 hint_checked=1',
+        )
+        for index, text in enumerate(mutations):
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                module.check_log(text)
+
     def fixture(self, folder):
         image = bytearray(64)
         image[56:60] = b'ARMd'

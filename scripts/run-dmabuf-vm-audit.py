@@ -8,7 +8,7 @@ import re
 import subprocess
 
 REQUIRED = ('ARM64', 'ARM64_4K_PAGES', 'ARM64_VA_BITS_39', 'MMU', 'SMP', 'BLK_DEV_INITRD',
-            'BINFMT_ELF', 'PROC_FS', 'SYSFS', 'SERIAL_AMBA_PL011',
+            'BINFMT_ELF', 'PROC_FS', 'SYSFS', 'DMA_SHARED_BUFFER', 'SERIAL_AMBA_PL011',
             'SERIAL_AMBA_PL011_CONSOLE', 'XIAOMI_DMABUF_HUGETLB', 'XIAOMI_DMABUF_RUNTIME_AUDIT')
 
 
@@ -73,6 +73,40 @@ def check_log(text):
                 raise ValueError('page-table accounting did not return to baseline: ' + device)
             if not allocation.start() < fired[0].start() < returned[0].start() < unwound[0].start() < text.index(retry) < text.index(boundary):
                 raise ValueError('partial ENOMEM lifetime order wrong: ' + device)
+    check_export_log(text)
+
+
+def check_export_log(text):
+    allocated = list(re.finditer(r'DMA_EXPORT_ALLOC id=([1-9][0-9]*) mode=([01]) bytes=4194304\r?\n',text))
+    released = list(re.finditer(r'DMA_EXPORT_RELEASE id=([1-9][0-9]*) mode=([01])\r?\n',text))
+    mappings = list(re.finditer(r'DMA_EXPORT_MMAP id=([1-9][0-9]*) mode=([01]) bytes=([0-9]+) offset=0 huge=([01]) result=0\r?\n',text))
+    if (len(allocated) != 2 or len(released) != 2 or len(mappings) != 8 or
+        text.count('DMA_EXPORT_ALLOC') != 2 or text.count('DMA_EXPORT_RELEASE') != 2 or
+        text.count('DMA_EXPORT_MMAP') != 8 or text.count('DMA_EXPORT_ALIGN') != 8 or
+        text.count('DMA_EXPORT_LAST_UNMAP') != 2 or text.count('DMA_EXPORT_CASE_PASS') != 2 or
+        len({m.group(1) for m in allocated}) != 2):
+        raise ValueError('missing/duplicate/malformed DMA-BUF core/export evidence')
+    for mode in (0,1):
+        allocations = [m for m in allocated if m.group(2) == str(mode)]
+        if len(allocations) != 1:
+            raise ValueError('DMA-BUF mode allocation missing/duplicate')
+        allocation = allocations[0]
+        releases = [m for m in released if m.group(1,2) == allocation.group(1,2)]
+        boundary = 'DMA_EXPORT_LAST_UNMAP mode='+str(mode)
+        complete = 'DMA_EXPORT_CASE_PASS mode='+str(mode)+' live=0'
+        if len(releases) != 1 or text.count(complete) != 1 or text.count(boundary) != 1:
+            raise ValueError('DMA-BUF final release/lifetime mismatch')
+        if not allocation.start() < text.index(boundary) < releases[0].start() < text.index(complete) < text.index('DMA_GUEST_PASS:'):
+            raise ValueError('DMA-BUF release outside final-unmap interval')
+        for length,mask,huge,hint in ((4096,4095,0,0),(65536,65535,0,1),
+                                      (2097152,2097151,1,1),(4194304,2097151,1,0)):
+            matching = [m for m in mappings if m.group(1,2) == allocation.group(1,2) and
+                        m.group(3,4) == (str(length),str(huge))]
+            alignment = f'DMA_EXPORT_ALIGN mode={mode} bytes={length} mask={mask} aligned=1 hint_checked={hint}'
+            if len(matching) != 1 or text.count(alignment) != 1:
+                raise ValueError('DMA-BUF callback/size/alignment proof missing')
+            if not allocation.start() < matching[0].start() < text.index(alignment) < text.index(boundary):
+                raise ValueError('DMA-BUF callback/alignment order mismatch')
 
 
 def command(args):
@@ -118,7 +152,9 @@ def run(args):
         'initramfs_sha256': hashlib.sha256(initramfs).hexdigest(),
         'verified': ['basic guest workload', 'four file-owned buffers freed exactly once after final unmap',
                      'PMD/PTE ordinal-two ENOMEM after one published block; same-address retry',
-                     'page-table accounting returns to baseline after selected partial ENOMEM'] if reason is None else [],
+                     'page-table accounting returns to baseline after selected partial ENOMEM',
+                     'real DMA-BUF core to exporter mmap, 4K/64K/2M/4M alignment including nonaligned hints',
+                     'two DMA-BUF-owned buffers survive fd close/fork/move until final unmap'] if reason is None else [],
         'pending': ['all allocator failure sites and accounting', 'stock GPU producer activation', 'hardware/complete lifetime'],
     }
     (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')

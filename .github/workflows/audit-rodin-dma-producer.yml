@@ -8,6 +8,7 @@ on:
       - .github/workflows/audit-rodin-dma-producer.yml
       - scripts/prepare-dmabuf-runtime-audit.py
       - scripts/test-dmabuf-runtime-producer-source.py
+      - scripts/test-dmabuf-exporter-source.py
       - scripts/prepare-dmabuf-fault-sites.py
       - scripts/test-dmabuf-fault-sites.py
       - scripts/test-dmabuf-audit-fault-plan.py
@@ -26,6 +27,8 @@ on:
       - tools/stock-recovery/runtime-audit/guest-workload.c
       - tools/stock-recovery/runtime-audit/audit-data.h
       - tools/stock-recovery/runtime-audit/recovered-dma-audit.c
+      - tools/stock-recovery/runtime-audit/recovered-dma-export-audit.c
+      - tools/stock-recovery/runtime-audit/audit-export-contract.h
       - tools/stock-recovery/runtime-audit/audit-map-contract.h
       - tools/stock-recovery/runtime-audit/audit-fault-plan.h
       - tools/stock-recovery/runtime-audit/test_audit_fault_plan.c
@@ -107,6 +110,7 @@ jobs:
             cp "ws/common/$source_path" "runtime-reference/$source_path"
           done
           python3 scripts/test-dmabuf-runtime-producer-source.py
+          python3 scripts/test-dmabuf-exporter-source.py
           python3 scripts/test-dmabuf-audit-fault-plan.py
           python3 scripts/test-dmabuf-audit-log-formats.py
           DMA_ACK_REFERENCE="$GITHUB_WORKSPACE/runtime-reference" \
@@ -130,6 +134,8 @@ jobs:
           cp runtime-address/manifest.json dma-evidence/address-overlay-manifest.json
           ws/common/scripts/config --file ws/common/arch/arm64/configs/dma_audit.fragment \
             --enable XIAOMI_DMABUF_RUNTIME_AUDIT
+          ws/common/scripts/config --file ws/common/arch/arm64/configs/dma_audit.fragment \
+            --enable DMA_SHARED_BUFFER
       - name: Compile audit kernel
         run: |
           set -euo pipefail
@@ -159,7 +165,8 @@ jobs:
               symbols = list(elf.get_section_by_name('.symtab').iter_symbols())
               evidence = {}
               for name in ('audit_fops', 'audit_pmd_device', 'audit_pte_device',
-                           'audit_fault_pmd_device', 'audit_fault_pte_device'):
+                           'audit_fault_pmd_device', 'audit_fault_pte_device',
+                           'dma_export_audit_ops', 'dma_export_audit_factory_fops', 'dma_export_audit_device'):
                   matches = [s for s in symbols if s.name == name and s['st_shndx'] != 'SHN_UNDEF']
                   if len(matches) != 1 or matches[0]['st_info']['type'] != 'STT_OBJECT' or not matches[0]['st_size']:
                       raise SystemExit('missing/ambiguous built-in producer object: ' + name)
@@ -168,6 +175,11 @@ jobs:
               if len(matches) != 1 or matches[0]['st_info']['type'] != 'STT_FUNC' or not matches[0]['st_size']:
                   raise SystemExit('missing/ambiguous linked audit allocation callback')
               evidence['recovered_dma_audit_fail_alloc'] = {'size': matches[0]['st_size'], 'address': matches[0]['st_value']}
+              for name in ('dma_export_audit_mmap', 'dma_export_audit_release', 'dma_export_audit_ioctl', 'recovered_dma_audit_plain_remap'):
+                  matches = [s for s in symbols if s.name == name and s['st_shndx'] != 'SHN_UNDEF']
+                  if len(matches) != 1 or matches[0]['st_info']['type'] != 'STT_FUNC' or not matches[0]['st_size']:
+                      raise SystemExit('missing/ambiguous linked exporter function: ' + name)
+                  evidence[name] = {'size': matches[0]['st_size'], 'address': matches[0]['st_value']}
           with open('dma-evidence/runtime-producer-elf.json', 'x') as output:
               json.dump({'status': 'COMPILE_LINK_ONLY_NOT_RUNTIME', 'objects': evidence}, output, indent=2)
           PY
