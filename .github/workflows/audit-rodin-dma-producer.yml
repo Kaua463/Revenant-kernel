@@ -7,6 +7,10 @@ on:
     paths:
       - .github/workflows/audit-rodin-dma-producer.yml
       - scripts/prepare-dmabuf-runtime-audit.py
+      - scripts/prepare-dmabuf-fault-sites.py
+      - scripts/test-dmabuf-fault-sites.py
+      - scripts/test-dmabuf-audit-fault-plan.py
+      - scripts/test-dmabuf-audit-log-formats.py
       - scripts/test-dmabuf-runtime-integration.py
       - scripts/run-dmabuf-vm-audit.py
       - scripts/test-dmabuf-vm-runner.py
@@ -16,6 +20,8 @@ on:
       - tools/stock-recovery/runtime-audit/audit-data.h
       - tools/stock-recovery/runtime-audit/recovered-dma-audit.c
       - tools/stock-recovery/runtime-audit/audit-map-contract.h
+      - tools/stock-recovery/runtime-audit/audit-fault-plan.h
+      - tools/stock-recovery/runtime-audit/test_audit_fault_plan.c
       - tools/stock-recovery/runtime-audit/Kconfig
       - tools/stock-recovery/runtime-audit/Makefile
 
@@ -59,7 +65,7 @@ jobs:
           done < <(sudo grep -RIl 'dl.google.com/linux/chrome' /etc/apt/sources.list.d || true)
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            bc bison build-essential ca-certificates curl flex git libelf-dev \
+            bc bison build-essential ca-certificates clang curl flex git libelf-dev \
             libssl-dev lz4 python3 python3-pyelftools rsync xz-utils zip zstd
           sudo apt-get install -y --no-install-recommends \
             qemu-system-arm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
@@ -94,6 +100,8 @@ jobs:
             cp "ws/common/$source_path" "runtime-reference/$source_path"
           done
           python3 scripts/test-dmabuf-runtime-producer-source.py
+          python3 scripts/test-dmabuf-audit-fault-plan.py
+          python3 scripts/test-dmabuf-audit-log-formats.py
           DMA_ACK_REFERENCE="$GITHUB_WORKSPACE/runtime-reference" \
             python3 scripts/test-dmabuf-runtime-integration.py
           python3 scripts/validate-dmabuf-overlay.py --source ws/common \
@@ -132,11 +140,16 @@ jobs:
               elf = ELFFile(stream)
               symbols = list(elf.get_section_by_name('.symtab').iter_symbols())
               evidence = {}
-              for name in ('audit_fops', 'audit_pmd_device', 'audit_pte_device'):
+              for name in ('audit_fops', 'audit_pmd_device', 'audit_pte_device',
+                           'audit_fault_pmd_device', 'audit_fault_pte_device'):
                   matches = [s for s in symbols if s.name == name and s['st_shndx'] != 'SHN_UNDEF']
                   if len(matches) != 1 or matches[0]['st_info']['type'] != 'STT_OBJECT' or not matches[0]['st_size']:
                       raise SystemExit('missing/ambiguous built-in producer object: ' + name)
                   evidence[name] = {'size': matches[0]['st_size'], 'address': matches[0]['st_value']}
+              matches = [s for s in symbols if s.name == 'recovered_dma_audit_fail_alloc' and s['st_shndx'] != 'SHN_UNDEF']
+              if len(matches) != 1 or matches[0]['st_info']['type'] != 'STT_FUNC' or not matches[0]['st_size']:
+                  raise SystemExit('missing/ambiguous linked audit allocation callback')
+              evidence['recovered_dma_audit_fail_alloc'] = {'size': matches[0]['st_size'], 'address': matches[0]['st_value']}
           with open('dma-evidence/runtime-producer-elf.json', 'x') as output:
               json.dump({'status': 'COMPILE_LINK_ONLY_NOT_RUNTIME', 'objects': evidence}, output, indent=2)
           PY

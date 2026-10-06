@@ -49,6 +49,8 @@ int main(void)
 		fatal("mount guest technical filesystems");
 	make_audit_node("recovered-dma-audit-pmd");
 	make_audit_node("recovered-dma-audit-pte");
+	make_audit_node("recovered-dma-audit-fault-pmd");
+	make_audit_node("recovered-dma-audit-fault-pte");
 	child = fork();
 	if (child < 0)
 		fatal("start guest workload");

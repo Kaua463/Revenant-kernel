@@ -34,14 +34,18 @@ class Integration(unittest.TestCase):
 
     def test_dry_run_apply_and_repeat(self):
         before = (self.source / 'mm/Kconfig').read_bytes()
+        huge_before = (self.source / 'mm/huge_memory.c').read_bytes()
         report = module.run(self.args)
-        self.assertEqual(len(report['changes']), 6)
+        self.assertEqual(len(report['changes']), 8)
         self.assertEqual((self.source / 'mm/Kconfig').read_bytes(), before)
+        self.assertEqual((self.source / 'mm/huge_memory.c').read_bytes(), huge_before)
         self.assertFalse((self.source / 'mm/recovered-dma-audit').exists())
         self.args.apply_review = True
         module.run(self.args)
         self.assertEqual((self.source / 'mm/recovered-dma-audit/recovered-dma-audit.c').read_bytes(),
                          (ROOT / 'tools/stock-recovery/runtime-audit/recovered-dma-audit.c').read_bytes())
+        self.assertEqual((self.source / 'mm/huge_memory.c').read_text().count(
+                         'if (recovered_dma_audit_fail_alloc(mm, map_type))'), 2)
         with self.assertRaises(ValueError):
             module.run(self.args)
 
@@ -50,7 +54,7 @@ class Integration(unittest.TestCase):
         # must not silently filter paths against that unrelated Git prefix.
         subprocess.run(['git', 'init', '-q', str(self.folder)], check=True)
         report = module.run(self.args)
-        self.assertEqual(len(report['changes']), 6)
+        self.assertEqual(len(report['changes']), 8)
 
     def test_target_drift_no_write(self):
         (self.source / 'mm/memory.c').write_text('drift')

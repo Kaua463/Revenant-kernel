@@ -548,6 +548,45 @@ armar ordinal2 em task atual, confirmar primeiro bloco publicado, ENOMEM
 propagado, syscall remove todas PTE/PMD parciais, retry limpo e final free.
 Stock producer activation e full MMU/lifecycle/hardware continuam abertos.
 
+### Checkpoint — partial ENOMEM ligado ao produtor; novo runtime pendente
+
+Produtor agora inclui callback built-in não exportado, mutex só da auditoria,
+task/mm-scoped one-shot ordinal2 e reset ao fim do remap. Duas devices fault
+0600 adicionais, CAP_SYS_ADMIN, sem ioctl/read/write/PFN interface. Registro de
+quatro devices tem unwind inverso em cada falha. Primeira chamada válida fault
+consome arm; retries e devices normais não injetam. Map counter deve aumentar
+exatamente1 antes da segunda alocação; count errado emite fail marker.
+Além do contador, callback verifica a tabela real sob mmap write lock:
+PMD present/huge com PFN exato ou todos512 PTEs present/special/PFNs contíguos
+do primeiro2MiB. Evita confundir incremento com pmd_set_huge bem-sucedido
+(stock ignora esse return). Serial exige table=1; faltante/0 falha fechado.
+Isso injeta o **resultado da falha no call site**, não falha global do allocator.
+
+Guest: mmap retorna ENOMEM, mincore retorna ENOMEM, mesma VA aceita
+MAP_FIXED_NOREPLACE+preflight sem tabelas remanescentes, dados íntegros;
+depois repete workload completo PMD/PTE incluindo close/fork/partial-unmap/
+reader/move/mprotect/cross-CPU/final-unmap. Runner exige quatro allocations/
+releases únicas e duas sequências alloc→published1/fault→return(-12,fired1)
+→same-address retry→last-unmap→release→case-pass→guest-pass→PID1-pass.
+Mocks passam negativos de IDs/mode/ordinal/count/result/order/duplicate;
+não são runtime evidence.
+
+Run37492696088/head4a459b2 completed **failure na compilação**, não executou VM.
+Root cause: AUDIT_BYTES promove ULL por DMA_AUDIT_BLOCK_BYTES=1ULL<<21,
+mas novo log usava %lu. Corrigido cast explícito unsigned long; novo teste
+compila as cinco expressões reais de log com clang format/Werror; remove-cast
+e wrong-ID-format negativos falham. Inicial fixture continha variável não usada;
+removida sem desabilitar warnings. Artefato de falha preservado em
+outputs/dma-producer-failed-37492696088. Backprop §B proposta: log-varargs type
+promotion → compiled expression regression; SPEC não modificado sem aprovação.
+
+Sete testes integração, oito source-policy, oito runner, quatro generator,
+quatro initramfs, três log-format e ASan/UBSan selector passaram localmente.
+Shipping recipe/hash/interface intocados. Audit huge_memory substitution e
+five source pins só no preparer da VM. Novo Actions/actual ENOMEM/unwind/free
+ainda pendente; accounting de todos failure sites, ativação real Xiaomi,
+runtime composto e hardware continuam obrigatórios. T20 permanece ~.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

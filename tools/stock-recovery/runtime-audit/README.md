@@ -47,6 +47,9 @@ ownership contract and remains unverified.
 0600 misc devices require CAP_SYS_ADMIN to open: `recovered-dma-audit-pmd` uses
 map_type=0; `recovered-dma-audit-pte` uses map_type=1. Each open owns a fresh,
 zeroed, contiguous 4 MiB order-10 allocation, released by the last file release.
+Two additional 0600 devices `recovered-dma-audit-fault-pmd`/`-fault-pte` have
+the same restrictions, but inject ordinal-two allocation failure on the first
+valid mmap only. The normal devices do not arm failure injection.
 High-order allocation can legitimately fail; no fallback to arbitrary memory.
 Mappings may cover aligned 2 or 4 MiB subsets, shared and non-executable only.
 The mmap callback validates overflow/bounds, checks every actual destination
@@ -58,8 +61,8 @@ Kconfig/Makefile are **not sourced by any shipping kernel tree or workflow**. Th
 built-in, default-off option is for a disposable ARM64 VM build only;
 the C guards also reject module, wrong geometry or missing recovered feature.
 No shipping overlay/config has changed. `prepare-dmabuf-runtime-audit.py` gates
-all pristine reference hashes/canonical recipes, all post-DMA inputs and four
-producer source pins before adding six paths in a disposable tree. Drift,
+all pristine reference hashes/canonical recipes, all post-DMA inputs and five
+producer source pins before changing eight paths in a disposable tree. Drift,
 symlinks, existing destination/evidence and repeated application fail closed.
 `test-dmabuf-runtime-integration.py` covers those conditions in temporary trees.
 The separate `audit-rodin-dma-producer.yml` compiles built-in on exact ACK,
@@ -95,7 +98,7 @@ shared-write visibility, child partial unmap, mremap, mprotect split/restore,
 MAYEXEC refusal, parent partial unmap, cross-CPU verification and concurrent
 reader on the surviving alias during other-VMA teardown. Final alias unmaps.
 
-Partial ENOMEM preparation (not wired or executed yet):
+Partial ENOMEM audit integration (wired, runtime pending):
 `prepare-dmabuf-fault-sites.py` takes the exact hash-pinned recovered
 `mm/huge_memory.c` and emits a separate copy with two audit-config-gated failure
 sites, immediately before deposited PMD-table allocation or PTE-table allocation.
@@ -109,10 +112,20 @@ python3 scripts/test-dmabuf-audit-fault-plan.py
 python3 scripts/test-dmabuf-fault-sites.py
 ```
 
-The generated audit file requires the real producer callback, serialization and
-guest assertions before compilation/execution. The existing VM run does not use
-these new sites. Actual partial-map publication, failed-mmap teardown, clean
-retry, memory accounting and final release remain unproven.
+The producer now supplies the callback under its audit-only remap mutex. Only
+the armed current task/mm advances the ordinal; the second allocator site
+returns ENOMEM after the matching recovered map counter increased exactly once.
+It also walks the actual first block: present huge PMD with the owned PFN, or
+all 512 present/special PTEs with the consecutive owned PFNs. Counter increase
+alone cannot prove publication because stock ignores `pmd_set_huge`'s return.
+The guest checks ENOMEM, mincore ENOMEM (no VMA), same-address NOREPLACE retry
+(including the producer's no-stale-table preflight), every data word and full
+basic alias/fork/move/split/SMP workload after retry. Four allocation/release IDs,
+two partial-map/failure/retry event sequences and strict final-unmap ordering
+are required in serial. Previous runs do not prove these new assertions.
+This deliberately injects the allocation-failure outcome at the exact call
+site, not a global allocator failure; other allocation sites/accounting and full
+hardware lifetimes still require additional gates.
 The basic workload executed successfully in run 37428061875. That run does not
 verify final allocation-free count or fault-injected partial ENOMEM unwind and
 does not prove all lifetimes; the new final-release instrumentation has its own
@@ -133,7 +146,7 @@ include that runner-specific regression. Canonical patch/path/hash gates remain
 unchanged.
 
 `guest-init.c` is static PID1 for the RAM archive only: mounts proc/sysfs,
-creates exactly the two misc nodes from their technical sysfs dev numbers,
+creates exactly the four misc nodes from their technical sysfs dev numbers,
 executes the workload and powers off. GKI has no built-in devtmpfs here, so the
 archive includes only the standard 5:1 console node; audit nodes are discovered,
 not guessed. `build-dmabuf-vm-initramfs.py` requires static AArch64 ELF executables,

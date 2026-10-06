@@ -10,15 +10,22 @@ import unittest
 from unittest.mock import patch
 
 module = SourceFileLoader('dma_vm_runner', str(Path(__file__).with_name('run-dmabuf-vm-audit.py'))).load_module()
-PASS = '\n'.join(('DMA_AUDIT_ALLOC id=1 mode=0 bytes=4194304',
-                  'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-pmd',
-                  'DMA_AUDIT_RELEASE id=1 mode=0',
-                  'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-pmd reader_passes=1',
-                  'DMA_AUDIT_ALLOC id=2 mode=1 bytes=4194304',
-                  'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-pte',
-                  'DMA_AUDIT_RELEASE id=2 mode=1',
-                  'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-pte reader_passes=1',
-                  'DMA_GUEST_PASS: basic tests', 'DMA_VM_RESULT_PASS: finished'))
+def mock_pass():
+    lines = []
+    for identity, mode, device, inject in ((1, 0, 'pmd', 0), (2, 1, 'pte', 0),
+                                           (3, 0, 'fault-pmd', 1), (4, 1, 'fault-pte', 1)):
+        lines.append(f'DMA_AUDIT_ALLOC id={identity} mode={mode} bytes=4194304 fault={inject}')
+        if inject:
+            lines.extend((f'DMA_AUDIT_FAULT id={identity} mode={mode} ordinal=2 published=1 table=1',
+                          f'DMA_AUDIT_FAULT_RETURN id={identity} mode={mode} result=-12 fired=1',
+                          f'DMA_GUEST_ENOMEM_PASS: /dev/recovered-dma-audit-{device} same_address_retry=1'))
+        lines.extend((f'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-{device}',
+                      f'DMA_AUDIT_RELEASE id={identity} mode={mode}',
+                      f'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-{device} reader_passes=1'))
+    return '\n'.join(lines + ['DMA_GUEST_PASS: basic tests', 'DMA_VM_RESULT_PASS: finished'])
+
+
+PASS = mock_pass()
 
 
 class Runner(unittest.TestCase):
@@ -63,7 +70,7 @@ class Runner(unittest.TestCase):
             with self.subTest(marker=marker), self.assertRaises(ValueError):
                 module.check_log(PASS.replace(marker, 'missing', 1))
         for error in ('DMA_GUEST_FAIL: x', 'DMA_VM_RESULT_FAIL: x', 'BUG: x',
-                      'WARNING: x', 'Oops: x', 'Kernel panic', 'Call trace:'):
+                      'WARNING: x', 'Oops: x', 'Kernel panic', 'Call trace:', 'DMA_AUDIT_FAULT_FAIL: x'):
             with self.subTest(error=error), self.assertRaises(ValueError):
                 module.check_log(PASS + '\n' + error)
         with self.assertRaises(ValueError):
@@ -97,6 +104,19 @@ class Runner(unittest.TestCase):
         prefixed = '\n'.join('[    1.000] ' + line if line.startswith('DMA_AUDIT_') else line
                              for line in PASS.splitlines())
         module.check_log(prefixed.replace('\n', '\r\n'))
+
+    def test_partial_enomem_evidence_negative_mutations(self):
+        for before, after in (('ordinal=2', 'ordinal=1'), ('published=1', 'published=0'), ('table=1', 'table=0'),
+                              ('result=-12', 'result=0'), ('fired=1', 'fired=0'),
+                              ('FAULT id=3', 'FAULT id=1'), ('FAULT id=3 mode=0', 'FAULT id=3 mode=1'),
+                              ('same_address_retry=1', 'same_address_retry=0'),
+                              ('DMA_GUEST_ENOMEM_PASS:', 'missing')):
+            with self.subTest(before=before), self.assertRaises(ValueError):
+                module.check_log(PASS.replace(before, after, 1))
+        with self.assertRaises(ValueError):
+            module.check_log(PASS + '\nDMA_AUDIT_FAULT id=3 mode=0 ordinal=2 published=1\n')
+        with self.assertRaises(ValueError):
+            module.check_log('DMA_GUEST_PASS: early\n' + PASS.replace('DMA_GUEST_PASS: basic tests', 'removed'))
 
     def test_ram_only_command(self):
         args = SimpleNamespace(kernel=Path('/tmp/audit/Image'), initramfs=Path('/tmp/audit/initramfs.cpio'))

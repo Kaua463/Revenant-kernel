@@ -17,13 +17,28 @@ def validate(source, config, makefile):
         'vm_flags_clear(vma, VM_MAYEXEC)', 'vma->vm_flags & VM_EXEC',
         '!!(vma->vm_flags & VM_SHARED)',
         'page_to_pfn(buffer->pages) + (offset >> PAGE_SHIFT)',
-        'return dmabuf_huge_remap_pfn_range(',
+        'result = dmabuf_huge_remap_pfn_range(',
         'misc_deregister(&audit_pmd_device)',
         'atomic64_inc_return(&audit_next_id)',
         'unsigned long long id = buffer->id;',
         'unsigned int map_type = buffer->map_type;',
-        'DMA_AUDIT_ALLOC id=%llu mode=%u bytes=%lu',
+        'DMA_AUDIT_ALLOC id=%llu mode=%u bytes=%lu fault=%u',
         'DMA_AUDIT_RELEASE id=%llu mode=%u',
+        'lockdep_assert_held(&audit_fault_mutex)',
+        'mutex_lock(&audit_fault_mutex)',
+        'mutex_unlock(&audit_fault_mutex)',
+        'dma_audit_fault_check(&audit_fault_plan, (unsigned long)current,',
+        '(unsigned long)mm)',
+        'if (published != 1 || !table_present)',
+        'table_present = audit_first_block_present(map_type);',
+        'pmd_pfn(*pmd) == audit_fault_first_pfn',
+        'pte_pfn(pte[index]) != audit_fault_first_pfn + index',
+        'audit_fault_plan = (struct dma_audit_fault_plan){0};',
+        'buffer->fault_pending = false;',
+        'goto undo_fault_pmd;',
+        'misc_deregister(&audit_fault_pmd_device)',
+        'goto undo_pte;',
+        'misc_deregister(&audit_pte_device)',
     )
     for token in required:
         if token not in source:
@@ -33,8 +48,8 @@ def validate(source, config, makefile):
                   'vm_file =', 'module_init(', 'module_exit('):
         if token in source:
             raise ValueError('forbidden audit interface: ' + token)
-    if source.count('.mode = 0600') != 2:
-        raise ValueError('both devices must be root-only')
+    if source.count('.mode = 0600') != 4:
+        raise ValueError('all four devices must be root-only')
     release = source.split('static int audit_release(', 1)[1].split('static bool audit_empty_destination', 1)[0]
     if not release.index('__free_pages(') < release.index('kfree(buffer);') < release.index('pr_info('):
         raise ValueError('release event must follow both real frees')
@@ -90,6 +105,18 @@ class SourcePolicy(unittest.TestCase):
                        self.source.replace(event, event + '\n\tbuffer->map_type = 0;')):
             with self.assertRaises(ValueError):
                 validate(source, self.config, self.makefile)
+
+    def test_fault_scope_serialization_and_cleanup_required(self):
+        for token in ('lockdep_assert_held(&audit_fault_mutex)',
+                      'mutex_lock(&audit_fault_mutex)', 'mutex_unlock(&audit_fault_mutex)',
+                      'dma_audit_fault_check(&audit_fault_plan, (unsigned long)current,',
+                      '(unsigned long)mm)', 'if (published != 1 || !table_present)',
+                      'table_present = audit_first_block_present(map_type);',
+                      'audit_fault_plan = (struct dma_audit_fault_plan){0};',
+                      'buffer->fault_pending = false;', 'goto undo_fault_pmd;',
+                      'misc_deregister(&audit_fault_pmd_device)', 'goto undo_pte;'):
+            with self.subTest(token=token), self.assertRaises(ValueError):
+                validate(self.source.replace(token, 'REMOVED'), self.config, self.makefile)
 
 
 if __name__ == '__main__':

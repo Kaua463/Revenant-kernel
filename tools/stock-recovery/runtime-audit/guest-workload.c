@@ -115,7 +115,7 @@ static void migrate_and_verify(const void *alias)
 		fail("restore affinity");
 }
 
-static void exercise(const char *device)
+static void exercise(const char *device, int inject)
 {
 	int fd = open(device, O_RDWR | O_CLOEXEC), status;
 	void *first, *alias, *target, *moved;
@@ -125,6 +125,32 @@ static void exercise(const char *device)
 
 	if (fd < 0)
 		fail("open audit device");
+	if (inject) {
+		unsigned char residency[BYTES / 4096];
+		void *hole = reservation(BYTES);
+		void *result;
+
+		errno = 0;
+		result = mmap(hole, BYTES, PROT_READ | PROT_WRITE,
+			      MAP_SHARED | MAP_FIXED, fd, 0);
+		if (result != MAP_FAILED || errno != ENOMEM)
+			fail("injected second allocation did not return ENOMEM");
+		errno = 0;
+		if (!mincore(hole, BYTES, residency) || errno != ENOMEM)
+			fail("failed mmap left a VMA");
+		/* NOREPLACE proves no VMA; producer preflight rejects stale tables.
+		 * Reuse the same address, not a fresh one hiding residual mappings.
+		 */
+		result = mmap(hole, BYTES, PROT_READ | PROT_WRITE,
+			      MAP_SHARED | MAP_FIXED_NOREPLACE, fd, 0);
+		if (result != hole)
+			fail("retry at failed mmap address");
+		audit_fill(result, BYTES, SEED);
+		verify(result, 0, BYTES);
+		if (munmap(result, BYTES))
+			fail("retry teardown");
+		printf("DMA_GUEST_ENOMEM_PASS: %s same_address_retry=1\n", device);
+	}
 	reject(fd, 3 * 1024 * 1024, PROT_READ, MAP_SHARED, 0);
 	reject(fd, BLOCK, PROT_READ, MAP_PRIVATE, 0);
 	reject(fd, BLOCK, PROT_READ | PROT_EXEC, MAP_SHARED, 0);
@@ -211,8 +237,10 @@ int main(int argc, char **argv)
 	close(fd);
 	if (length < 16 || memcmp(compatible, "linux,dummy-virt", 16))
 		fail("QEMU virt DT required; refuse phone");
-	exercise("/dev/recovered-dma-audit-pmd");
-	exercise("/dev/recovered-dma-audit-pte");
+	exercise("/dev/recovered-dma-audit-pmd", 0);
+	exercise("/dev/recovered-dma-audit-pte", 0);
+	exercise("/dev/recovered-dma-audit-fault-pmd", 1);
+	exercise("/dev/recovered-dma-audit-fault-pte", 1);
 	puts("DMA_GUEST_PASS: basic mmap/fork/move/split/lifetime/SMP workload only");
 	return 0;
 }

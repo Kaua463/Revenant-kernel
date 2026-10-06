@@ -11,8 +11,10 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 validator = SourceFileLoader('runtime_dma_validator', str(ROOT / 'scripts/validate-dmabuf-overlay.py')).load_module()
+fault_sites = SourceFileLoader('runtime_dma_fault_sites', str(ROOT / 'scripts/prepare-dmabuf-fault-sites.py')).load_module()
 PINS = {
-    'recovered-dma-audit.c': '92f7a0430a2e9127091df1714f85f8713edcf992e41c6026fb1a3a78531eefd0',
+    'recovered-dma-audit.c': '783ec6996d4949c0639bcbaba15b0120611d587ecb5dcb46f93e0da8a932ba5d',
+    'audit-fault-plan.h': '4474736edbe74f299fe0907ee209cc628abf8b382e558c1c2cf1f134de240201',
     'audit-map-contract.h': '3bcb3044740336508a49ea37b4af205a52c0510cf9bc0ff3cd6f751709d0388c',
     'Kconfig': '54d2576b1c42ce6f301eb5de7934ddc74aabef1cc63a848f089e94ed2c28bf72',
     'Makefile': 'c23c0dcc8bdc4122064f57355a5f5e8525374fc83ba74bd6ae05e97e65a51ecf',
@@ -63,6 +65,8 @@ def run(args):
         if digest(data) != sha:
             raise ValueError('producer input drift: ' + name)
         changes['mm/recovered-dma-audit/' + name] = (None, data)
+    before = regular_path(args.source, 'mm/huge_memory.c').read_bytes()
+    changes['mm/huge_memory.c'] = (before, fault_sites.transform(before))
     for name, suffix in {
         'mm/Kconfig': '\n# Disposable VM audit only; never a phone build.\nsource "mm/recovered-dma-audit/Kconfig"\n',
         'mm/Makefile': '\n# Disposable VM audit only.\nobj-$(CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT) += recovered-dma-audit/\n',

@@ -8,12 +8,15 @@
 #include <linux/mm.h>
 #include <linux/mmap_lock.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/pgtable.h>
 #include <linux/printk.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/xiaomi_dmabuf_huge.h>
 
 #include "audit-map-contract.h"
+#include "audit-fault-plan.h"
 
 #if defined(MODULE) || !defined(CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT) || \
     !defined(CONFIG_XIAOMI_DMABUF_HUGETLB) || !defined(CONFIG_ARM64) || \
@@ -31,11 +34,81 @@ struct audit_buffer {
 	struct page *pages;
 	unsigned int map_type;
 	unsigned long long id;
+	bool fault_pending;
 };
 
 static atomic64_t audit_next_id = ATOMIC64_INIT(0);
+static DEFINE_MUTEX(audit_fault_mutex);
+static struct dma_audit_fault_plan audit_fault_plan;
+static unsigned long long audit_fault_id;
+static unsigned int audit_fault_mode;
+static s64 audit_fault_maps_before;
+static struct vm_area_struct *audit_fault_vma;
+static unsigned long audit_fault_first_pfn;
+extern atomic64_t dmabuf_hugetlb_pmd_map;
+extern atomic64_t dmabuf_hugetlb_contpte_map;
+
+/* Built-in audit link only, not exported or available in shipping kernels. */
+bool recovered_dma_audit_fail_alloc(struct mm_struct *mm, unsigned int map_type);
+
+static bool audit_first_block_present(unsigned int map_type)
+{
+	struct vm_area_struct *vma = audit_fault_vma;
+	unsigned long address = vma->vm_start;
+	pgd_t *pgd = pgd_offset(vma->vm_mm, address);
+	p4d_t *p4d;
+	pud_t *pud;
+	pmd_t *pmd;
+	pte_t *pte;
+	unsigned int index;
+
+	mmap_assert_write_locked(vma->vm_mm);
+	if (pgd_none(*pgd) || pgd_bad(*pgd))
+		return false;
+	p4d = p4d_offset(pgd, address);
+	if (p4d_none(*p4d) || p4d_bad(*p4d))
+		return false;
+	pud = pud_offset(p4d, address);
+	if (pud_none(*pud) || pud_bad(*pud))
+		return false;
+	pmd = pmd_offset(pud, address);
+	if (!map_type)
+		return pmd_present(*pmd) && pmd_trans_huge(*pmd) &&
+			pmd_pfn(*pmd) == audit_fault_first_pfn;
+	if (pmd_none(*pmd) || pmd_bad(*pmd) || pmd_trans_huge(*pmd))
+		return false;
+	pte = pte_offset_kernel(pmd, address);
+	for (index = 0; index < DMA_AUDIT_BLOCK_BYTES / PAGE_SIZE; index++)
+		if (!pte_present(pte[index]) || !pte_special(pte[index]) ||
+		    pte_pfn(pte[index]) != audit_fault_first_pfn + index)
+			return false;
+	return true;
+}
+
+bool recovered_dma_audit_fail_alloc(struct mm_struct *mm, unsigned int map_type)
+{
+	s64 published;
+	unsigned int table_present;
+
+	lockdep_assert_held(&audit_fault_mutex);
+	if (map_type != audit_fault_mode ||
+	    !dma_audit_fault_check(&audit_fault_plan, (unsigned long)current,
+				 (unsigned long)mm))
+		return false;
+	published = atomic64_read(map_type ? &dmabuf_hugetlb_contpte_map :
+				 &dmabuf_hugetlb_pmd_map) - audit_fault_maps_before;
+	table_present = audit_first_block_present(map_type);
+	if (published != 1 || !table_present)
+		pr_err("DMA_AUDIT_FAULT_FAIL: partial-map count=%lld table=%u\n", published, table_present);
+	pr_info("DMA_AUDIT_FAULT id=%llu mode=%u ordinal=2 published=%lld table=%u\n",
+		audit_fault_id, map_type, published, table_present);
+	return true;
+}
+
 static struct miscdevice audit_pmd_device;
 static struct miscdevice audit_pte_device;
+static struct miscdevice audit_fault_pmd_device;
+static struct miscdevice audit_fault_pte_device;
 
 static int audit_open(struct inode *inode, struct file *file)
 {
@@ -44,7 +117,8 @@ static int audit_open(struct inode *inode, struct file *file)
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
-	if (device != &audit_pmd_device && device != &audit_pte_device)
+	if (device != &audit_pmd_device && device != &audit_pte_device &&
+	    device != &audit_fault_pmd_device && device != &audit_fault_pte_device)
 		return -ENODEV;
 	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer)
@@ -55,11 +129,13 @@ static int audit_open(struct inode *inode, struct file *file)
 		kfree(buffer);
 		return -ENOMEM;
 	}
-	buffer->map_type = device == &audit_pte_device;
+	buffer->map_type = device == &audit_pte_device || device == &audit_fault_pte_device;
+	buffer->fault_pending = device == &audit_fault_pmd_device || device == &audit_fault_pte_device;
 	buffer->id = (unsigned long long)atomic64_inc_return(&audit_next_id);
 	file->private_data = buffer;
-	pr_info("DMA_AUDIT_ALLOC id=%llu mode=%u bytes=%lu\n",
-		buffer->id, buffer->map_type, AUDIT_BYTES);
+	pr_info("DMA_AUDIT_ALLOC id=%llu mode=%u bytes=%lu fault=%u\n",
+		buffer->id, buffer->map_type, (unsigned long)AUDIT_BYTES,
+		(unsigned int)buffer->fault_pending);
 	return 0;
 }
 
@@ -118,6 +194,8 @@ static int audit_mmap(struct file *file, struct vm_area_struct *vma)
 	unsigned long offset;
 	phys_addr_t physical = page_to_phys(buffer->pages);
 	enum dma_audit_map_reason reason;
+	bool inject;
+	int result;
 
 	mmap_assert_write_locked(vma->vm_mm);
 	if (vma->vm_flags & VM_EXEC)
@@ -138,10 +216,35 @@ static int audit_mmap(struct file *file, struct vm_area_struct *vma)
 	 * Keep vm_file unchanged; split/fork/move use ordinary file references.
 	 * Real MMU/SMP and ENOMEM unwind still require disposable guest tests.
 	 */
-	return dmabuf_huge_remap_pfn_range(vma, vma->vm_start,
+	/* Serialize audit remaps only. No global allocator failure or ioctl. */
+	mutex_lock(&audit_fault_mutex);
+	inject = buffer->fault_pending;
+	buffer->fault_pending = false;
+	audit_fault_mode = buffer->map_type;
+	audit_fault_id = buffer->id;
+	if (inject) {
+		audit_fault_vma = vma;
+		audit_fault_first_pfn = page_to_pfn(buffer->pages) + (offset >> PAGE_SHIFT);
+		if (!dma_audit_fault_arm(&audit_fault_plan, (unsigned long)current,
+					(unsigned long)vma->vm_mm, 2)) {
+			audit_fault_vma = NULL;
+			mutex_unlock(&audit_fault_mutex);
+			return -EINVAL;
+		}
+		audit_fault_maps_before = atomic64_read(buffer->map_type ?
+			&dmabuf_hugetlb_contpte_map : &dmabuf_hugetlb_pmd_map);
+	}
+	result = dmabuf_huge_remap_pfn_range(vma, vma->vm_start,
 			page_to_pfn(buffer->pages) + (offset >> PAGE_SHIFT),
 			vma->vm_end - vma->vm_start, vma->vm_page_prot,
 			buffer->map_type);
+	if (inject)
+		pr_info("DMA_AUDIT_FAULT_RETURN id=%llu mode=%u result=%d fired=%u\n",
+			buffer->id, buffer->map_type, result, audit_fault_plan.fired);
+	audit_fault_plan = (struct dma_audit_fault_plan){0};
+	audit_fault_vma = NULL;
+	mutex_unlock(&audit_fault_mutex);
+	return result;
 }
 
 static const struct file_operations audit_fops = {
@@ -166,6 +269,20 @@ static struct miscdevice audit_pte_device = {
 	.mode = 0600,
 };
 
+static struct miscdevice audit_fault_pmd_device = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "recovered-dma-audit-fault-pmd",
+	.fops = &audit_fops,
+	.mode = 0600,
+};
+
+static struct miscdevice audit_fault_pte_device = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "recovered-dma-audit-fault-pte",
+	.fops = &audit_fops,
+	.mode = 0600,
+};
+
 static int __init audit_init(void)
 {
 	int error = misc_register(&audit_pmd_device);
@@ -174,7 +291,20 @@ static int __init audit_init(void)
 		return error;
 	error = misc_register(&audit_pte_device);
 	if (error)
-		misc_deregister(&audit_pmd_device);
+		goto undo_pmd;
+	error = misc_register(&audit_fault_pmd_device);
+	if (error)
+		goto undo_pte;
+	error = misc_register(&audit_fault_pte_device);
+	if (error)
+		goto undo_fault_pmd;
+	return 0;
+undo_fault_pmd:
+	misc_deregister(&audit_fault_pmd_device);
+undo_pte:
+	misc_deregister(&audit_pte_device);
+undo_pmd:
+	misc_deregister(&audit_pmd_device);
 	return error;
 }
 device_initcall(audit_init);
