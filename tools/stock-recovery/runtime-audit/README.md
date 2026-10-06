@@ -105,10 +105,12 @@ reader on the surviving alias during other-VMA teardown. Final alias unmaps.
 
 Partial ENOMEM audit integration (selected VM gates passed):
 `prepare-dmabuf-fault-sites.py` takes the exact hash-pinned recovered
-`mm/huge_memory.c` and emits a separate copy with two audit-config-gated failure
-sites, immediately before deposited PMD-table allocation or PTE-table allocation.
+`mm/huge_memory.c` and emits a separate copy with three audit-config-gated failure
+sites: cold-PUD `__pmd_alloc`, deposited-table `pte_alloc_one`, and
+`pte_alloc_map_lock`. The cold-PUD callback is wired but currently dormant:
+the guest does not yet arm it. No PMD-table failure runtime coverage is claimed.
 It preserves the rest of the source and never writes input/production overlay.
-`audit-fault-plan.h` supplies a bounded, task/mm-scoped, one-shot ordinal selector.
+`audit-fault-plan.h` supplies a bounded, site/task/mm-scoped, one-shot ordinal selector.
 Its caller must serialize arm/check/reset; it is not a concurrent allocator or
 an ENOMEM model. Host selector tests and generated-site preservation tests:
 
@@ -117,8 +119,8 @@ python3 scripts/test-dmabuf-audit-fault-plan.py
 python3 scripts/test-dmabuf-fault-sites.py
 ```
 
-The producer now supplies the callback under its audit-only remap mutex. Only
-the armed current task/mm advances the ordinal; the second allocator site
+The producer supplies callbacks under its audit-only remap mutex. Only
+the matching site and armed current task/mm advance the ordinal; the second leaf allocation
 returns ENOMEM after the matching recovered map counter increased exactly once.
 It also walks the actual first block: present huge PMD with the owned PFN, or
 all 512 present/special PTEs with the consecutive owned PFNs. Counter increase

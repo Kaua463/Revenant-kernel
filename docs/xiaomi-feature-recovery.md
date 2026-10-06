@@ -811,6 +811,28 @@ fixture routing ≠ native-helper integration. SPEC não editada sem aprovação
 Nova VM real obrigatória, remaining failures/complete lifecycle/KMI/root/
 hardware continuam pendentes; não shipping/flash, T20 continua ~.
 
+### Checkpoint — site-aware fault selector e cold-PUD injection scaffold
+
+Local, sem novo push enquanto VM37519394415 continua pending/jobs=[].
+Header separa PMD_TABLE de LEAF antes de avançar ordinal; owner/mm tokens,
+one-shot e legacy wrappers LEAF preservados. ASan/UBSan passou para ambos
+sites×ordinals1/2, wrong site/task/mm, invalid arm e reset.
+Preparer agora gera três sites: cold PUD antes de __pmd_alloc, deposited
+pte_alloc_one e pte_alloc_map_lock. Callback novo builtin audit-only;
+PMD_TABLE permanece dormant: guest ainda arma só LEAF ordinal2.
+Não alegar cobertura de falha PMD_TABLE/first-leaf em runtime.
+
+Teste compila branch gerado exato com auditoria enabled/disabled: cold/warm,
+callback failure e allocator failure; disabled ignora callback e preserva
+allocator routing. São contadores de helpers, não prova MMU/allocator nativo.
+Fonte externa ao mapper preservada e removendo substituições recupera bytes
+originais. Pins header/producer atualizados; ELF gate exige callback novo.
+Testes locais: fault selector1, sites5, integration7, source9, formats3,
+exporter6, build gates5. Um comando tentou nome inexistente audit-source.py;
+erro mecânico de invocação, corrigido para runtime-producer-source.py9pass,
+não foi falha de código ou resultado de kernel. V35/V39 continuam aplicados.
+T20 permanece ~; guest failures restantes, KMI/root/SMP/hardware pendentes.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

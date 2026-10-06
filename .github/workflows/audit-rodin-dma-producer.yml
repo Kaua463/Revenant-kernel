@@ -182,7 +182,7 @@ jobs:
               if len(matches) != 1 or matches[0]['st_info']['type'] != 'STT_FUNC' or not matches[0]['st_size']:
                   raise SystemExit('missing/ambiguous linked audit allocation callback')
               evidence['recovered_dma_audit_fail_alloc'] = {'size': matches[0]['st_size'], 'address': matches[0]['st_value']}
-              for name in ('dma_export_audit_mmap', 'dma_export_audit_release', 'dma_export_audit_ioctl', 'recovered_dma_audit_plain_remap'):
+              for name in ('dma_export_audit_mmap', 'dma_export_audit_release', 'dma_export_audit_ioctl', 'recovered_dma_audit_plain_remap', 'recovered_dma_audit_fail_pmd_table'):
                   matches = [s for s in symbols if s.name == name and s['st_shndx'] != 'SHN_UNDEF']
                   if len(matches) != 1 or matches[0]['st_info']['type'] != 'STT_FUNC' or not matches[0]['st_size']:
                       raise SystemExit('missing/ambiguous linked exporter function: ' + name)

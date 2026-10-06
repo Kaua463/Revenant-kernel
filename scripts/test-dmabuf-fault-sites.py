@@ -4,7 +4,9 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 import tempfile
 import hashlib
+import json
 import os
+import subprocess
 from types import SimpleNamespace
 import unittest
 
@@ -37,7 +39,7 @@ class Sites(unittest.TestCase):
         self.source = Path(self.fixture.name)/'huge_memory.c'
         self.source.write_bytes(self.data)
 
-    def test_two_sites_and_outside_function_preserved(self):
+    def test_three_sites_and_outside_function_preserved(self):
         before = self.data.decode()
         after = module.transform(self.data).decode()
         start = before.index(module.FUNCTION_START)
@@ -51,7 +53,66 @@ class Sites(unittest.TestCase):
             body = body.replace(replacement, original)
         self.assertEqual(body, before[start:end])
         self.assertEqual(after.count('if (recovered_dma_audit_fail_alloc(mm, map_type))'), 2)
+        self.assertEqual(after.count('if (recovered_dma_audit_fail_pmd_table(mm, map_type))'), 1)
+        self.assertIn('if (pud_none(*(pud_t *)pgd)) {\n#ifdef CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT', after)
         self.assertNotIn('EXPORT_SYMBOL', module.DECLARATION)
+
+    def test_cold_pud_site_and_disabled_allocator_equivalence(self):
+        # Compile the exact generated branch, not a rewritten allocation model.
+        # Helpers only count routing: this does not prove native MMU behavior.
+        branch = module.SITES[0][1]
+        source = '''#include <assert.h>
+#include <errno.h>
+typedef unsigned long pud_t;
+static int cold, fail_site, fail_alloc, calls_site, calls_alloc;
+static int pud_none(pud_t p) { (void)p; return cold; }
+static int __pmd_alloc(void *mm, pud_t *p, unsigned long a) {
+ (void)mm; (void)p; (void)a; calls_alloc++; return fail_alloc;
+}
+#ifdef CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT
+static int recovered_dma_audit_fail_pmd_table(void *mm, unsigned int type) {
+ (void)mm; (void)type; calls_site++; return fail_site;
+}
+#endif
+static int run(void) {
+ pud_t entry = 0, *pgd = &entry;
+ void *mm = 0; unsigned long address = 0;
+#ifdef CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT
+ unsigned int map_type = 0;
+#endif
+''' + branch + '''
+ return 0;
+}
+int main(void) {
+ for (cold = 0; cold <= 1; cold++)
+  for (fail_site = 0; fail_site <= 1; fail_site++)
+   for (fail_alloc = 0; fail_alloc <= 1; fail_alloc++) {
+    calls_site = calls_alloc = 0;
+    int result = run();
+#ifdef CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT
+    assert(calls_site == cold);
+    assert(calls_alloc == (cold && !fail_site));
+    assert(result == (cold && (fail_site || fail_alloc) ? -ENOMEM : 0));
+#else
+    assert(calls_site == 0); assert(calls_alloc == cold);
+    assert(result == (cold && fail_alloc ? -ENOMEM : 0));
+#endif
+   }
+ return 0;
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='dma-cold-pud-routing-') as temporary:
+            folder = Path(temporary)
+            fixture = folder/'site.c'
+            fixture.write_text(source)
+            for enabled in (False, True):
+                executable = folder/str(enabled)
+                command = ['clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                           '-fsanitize=address,undefined', str(fixture), '-o', str(executable)]
+                if enabled:
+                    command.append('-DCONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT=1')
+                subprocess.run(command, check=True, timeout=30)
+                subprocess.run([str(executable)], check=True, timeout=30)
 
     def test_drift_and_repeat_fail_closed(self):
         for data in (self.data + b'\n', self.data.replace(b'pte_alloc_one(mm)', b'pte_alloc_one(NULL)', 1),
@@ -69,6 +130,10 @@ class Sites(unittest.TestCase):
             result = (args.output / 'huge_memory.c').read_bytes()
             self.assertEqual(source.read_bytes(), self.data)
             self.assertEqual(result, module.transform(self.data))
+            report = json.loads((args.output/'report.json').read_text())
+            self.assertEqual(len(report['sites']), 3)
+            self.assertIn('dormant', report['coverage']['pmd_table'])
+            self.assertIn('not implemented', report['coverage']['leaf_ordinal_1'])
             with self.assertRaises(ValueError):
                 module.run(args)
             self.assertEqual((args.output / 'huge_memory.c').read_bytes(), result)

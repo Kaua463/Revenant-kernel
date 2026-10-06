@@ -46,6 +46,8 @@ class Integration(unittest.TestCase):
                          (ROOT / 'tools/stock-recovery/runtime-audit/recovered-dma-audit.c').read_bytes())
         self.assertEqual((self.source / 'mm/huge_memory.c').read_text().count(
                          'if (recovered_dma_audit_fail_alloc(mm, map_type))'), 2)
+        self.assertEqual((self.source / 'mm/huge_memory.c').read_text().count(
+                         'if (recovered_dma_audit_fail_pmd_table(mm, map_type))'), 1)
         with self.assertRaises(ValueError):
             module.run(self.args)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate two audit-only failure sites from exact recovered source; no writes to input."""
+"""Generate three audit-only failure sites from exact recovered source; no input writes."""
 import argparse
 import hashlib
 import json
@@ -13,10 +13,22 @@ DECLARATION = '''#ifdef CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT
 /* NEW disposable audit only. Defined by the built-in audit producer. */
 extern bool recovered_dma_audit_fail_alloc(struct mm_struct *mm,
 		unsigned int map_type);
+extern bool recovered_dma_audit_fail_pmd_table(struct mm_struct *mm,
+		unsigned int map_type);
 #endif
 
 '''
 SITES = (
+    ('''if (pud_none(*(pud_t *)pgd) && __pmd_alloc(mm, (pud_t *)pgd, address))
+			return -ENOMEM;''',
+     '''if (pud_none(*(pud_t *)pgd)) {
+#ifdef CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT
+			if (recovered_dma_audit_fail_pmd_table(mm, map_type))
+				return -ENOMEM;
+#endif
+			if (__pmd_alloc(mm, (pud_t *)pgd, address))
+				return -ENOMEM;
+		}'''),
     ('pgtable_t pgtable = pte_alloc_one(mm);',
      '''pgtable_t pgtable;
 
@@ -68,13 +80,19 @@ def run(args):
     args.output.mkdir(parents=True)
     (args.output / 'huge_memory.c').write_bytes(after)
     report = {
-        'status': 'AUDIT_FAILURE_SITES_ONLY_NOT_WIRED_OR_RUNTIME_PROOF',
+        'status': 'AUDIT_FAILURE_SITES_GENERATED_NOT_RUNTIME_PROOF',
         'input_sha256': hashlib.sha256(before).hexdigest(),
         'output_sha256': hashlib.sha256(after).hexdigest(),
-        'sites': ['PMD deposited-table pte_alloc_one', 'PTE pte_alloc_map_lock'],
+        'sites': ['cold PUD __pmd_alloc', 'PMD deposited-table pte_alloc_one',
+                  'PTE pte_alloc_map_lock'],
         'scope': 'only recovered remap function; built-in VM audit config',
-        'pending': ['producer callback/task-mm serialization',
-                    'guest ENOMEM and retry assertions', 'real partial unwind runtime'],
+        'coverage': {
+            'leaf_ordinal_2': 'existing guest; current Image needs VM validation',
+            'leaf_ordinal_1': 'selector supported; guest not implemented',
+            'pmd_table': 'callback wired but dormant; guest arm not implemented',
+        },
+        'pending': ['first-leaf and cold-PUD guest arm/ENOMEM/retry assertions',
+                    'all allocation failures and complete unwind runtime'],
     }
     (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     print(report['status'])

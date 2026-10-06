@@ -34,5 +34,27 @@ int main(void)
 	assert(!dma_audit_fault_check(&plan, 11, 22));
 	assert(dma_audit_fault_arm(&plan, 11, 22, 1));
 	assert(dma_audit_fault_check(&plan, 11, 22));
+	for (unsigned int site = DMA_AUDIT_FAULT_PMD_TABLE; site <= DMA_AUDIT_FAULT_LEAF; site++) {
+		for (target = 1; target <= 2; target++) {
+			assert(dma_audit_fault_arm_site(&plan, 11, 22, site, target));
+			for (call = 1; call <= 8; call++) {
+				unsigned int seen = plan.seen;
+				assert(!dma_audit_fault_check_site(&plan, 11, 22, site ^ 1));
+				assert(!dma_audit_fault_check_site(&plan, 11, 22, 2));
+				assert(!dma_audit_fault_check_site(&plan, 33, 22, site));
+				assert(!dma_audit_fault_check_site(&plan, 11, 44, site));
+				assert(plan.seen == seen);
+				assert(dma_audit_fault_check_site(&plan, 11, 22, site) == (call == target));
+			}
+			assert(plan.seen == target && plan.fired == 1);
+		}
+	}
+	assert(!dma_audit_fault_arm_site(&plan, 11, 22, 2, 1));
+	assert(!plan.ordinal && !plan.seen && !plan.fired);
+	assert(dma_audit_fault_arm_site(&plan, 11, 22, DMA_AUDIT_FAULT_PMD_TABLE, 1));
+	/* Legacy LEAF check must neither fire nor consume a PMD-table fault. */
+	assert(!dma_audit_fault_check(&plan, 11, 22));
+	assert(plan.seen == 0 && plan.fired == 0);
+	assert(dma_audit_fault_check_site(&plan, 11, 22, DMA_AUDIT_FAULT_PMD_TABLE));
 	return 0;
 }

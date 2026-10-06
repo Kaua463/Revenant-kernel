@@ -56,6 +56,7 @@ extern atomic64_t dmabuf_hugetlb_contpte_map;
 
 /* Built-in audit link only, not exported or available in shipping kernels. */
 bool recovered_dma_audit_fail_alloc(struct mm_struct *mm, unsigned int map_type);
+bool recovered_dma_audit_fail_pmd_table(struct mm_struct *mm, unsigned int map_type);
 int recovered_dma_audit_plain_remap(struct vm_area_struct *vma,
 		unsigned long pfn, unsigned int map_type);
 
@@ -107,6 +108,19 @@ static bool audit_first_block_present(unsigned int map_type)
 		if (!pte_present(pte[index]) || !pte_special(pte[index]) ||
 		    pte_pfn(pte[index]) != audit_fault_first_pfn + index)
 			return false;
+	return true;
+}
+
+/* A cold-PUD allocation must not consume a leaf-only fault ordinal. This site
+ * is currently dormant in the guest: PMD-table arm/workload is a separate gate.
+ */
+bool recovered_dma_audit_fail_pmd_table(struct mm_struct *mm, unsigned int map_type)
+{
+	lockdep_assert_held(&audit_fault_mutex);
+	if (map_type != audit_fault_mode ||
+	    !dma_audit_fault_check_site(&audit_fault_plan, (unsigned long)current,
+			(unsigned long)mm, DMA_AUDIT_FAULT_PMD_TABLE))
+		return false;
 	return true;
 }
 
