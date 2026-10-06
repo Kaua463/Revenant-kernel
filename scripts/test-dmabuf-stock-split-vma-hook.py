@@ -110,10 +110,10 @@ def run(args):
             elif kernel.base<=address<kernel.base+len(image):
                 word=struct.unpack_from('<I',image,address-kernel.base)[0]
                 if word&0xffe0001f==0xd4200000:state['bug']=True;emu.emu_stop()
-        uc.hook_add(UC_HOOK_CODE,hook);case=0
+        uc.hook_add(UC_HOOK_CODE,hook);case=0;returned_file_refs=0
         def reset(flags,seq,addr,below,fail,has_file=0,callbacks=0):
             uc.mem_write(vma,bytes(208));uc.mem_write(vma,struct.pack('<5Q',0x400000,0x800000,mm,0,flags));uc.mem_write(vma+44,struct.pack('<I',seq));uc.mem_write(vma+48,struct.pack('<Q',sem));uc.mem_write(vma+120,struct.pack('<Q',0xabc));uc.mem_write(mm+224,struct.pack('<I',7));uc.mem_write(new,bytes(208));uc.mem_write(iterator,bytes(128));uc.mem_write(iterator+24,struct.pack('<Q',1))
-            uc.mem_write(file,bytes(256));uc.mem_write(file+24,struct.pack('<Q',17));uc.mem_write(file+232,struct.pack('<Q',ram+0x9000))
+            uc.mem_write(file,bytes(264));uc.mem_write(file+24,struct.pack('<Q',17));uc.mem_write(file+232,struct.pack('<Q',ram+0x9000))
             uc.mem_write(vmops,struct.pack('<3Q',opened if callbacks>=2 else 0,closed,may if callbacks>=2 else 0))
             uc.mem_write(vma+112,struct.pack('<Q',vmops if callbacks else 0));uc.mem_write(vma+128,struct.pack('<Q',file if has_file else 0))
             trace.clear();state.update(addr=addr,below=below,fail=fail,callbacks=callbacks,bug=False)
@@ -137,6 +137,17 @@ def run(args):
                 actual.append(struct.unpack('<Q',uc.mem_read(file+24,8))[0])
                 assert actual==list(out),('state',case,actual,list(out));assert trace==expected,('order',case,trace,expected)
                 for row in trace:counts[row[0]]+=1
+                if has_file and actual[8]==0:
+                    # Same file object whose inline get_file ran in __split_vma,
+                    # not a new synthetic count. Close caller itself not modeled
+                    # as real here: invoke actual stock fput explicitly.
+                    assert actual[9]==18
+                    expected_file=bytearray(uc.mem_read(file,264));struct.pack_into('<Q',expected_file,24,17)
+                    uc.reg_write(UC_ARM64_REG_X0,file);uc.reg_write(UC_ARM64_REG_X30,stop);uc.reg_write(UC_ARM64_REG_SP,stack)
+                    uc.emu_start(kernel.address('fput'),stop,count=10000)
+                    assert uc.reg_read(UC_ARM64_REG_PC)==stop and bytes(uc.mem_read(file,264))==bytes(expected_file)
+                    assert trace==expected, 'nonlast fput must not call queued helpers/callbacks'
+                    returned_file_refs+=1
                 case+=1
         for addr in (0x3ff000,0x400000,0x800000,0x801000):
             reset(1<<39,7,addr,0,0);uc.emu_start(kernel.address('__split_vma'),stop,count=100000);assert state['bug'] and not trace
@@ -148,8 +159,9 @@ def run(args):
             assert struct.unpack('<Q',uc.mem_read(file+24,8))[0]==expected_refs
             uc.mem_write(entry-4,struct.pack('<I',tag))
         assert all(counts[i] for i in range(15)) and counts[15]==0,counts
-        print(f'PASS: {case} ARM64 split-VMA cases + 4 boundary BUG guards + 2 callback CFI guards; routes={counts}; old/new bounds/pgoff/seq, cleanup and pre-update adjust')
-        print('may_split/open routing and inline get_file increment execute in stock; rejection and allocation/clone failures preserve count, no close. Callback bodies, VMA dup/free, anon clone, tree, locks and adjust modeled. No MMU or concurrent refcount/lifetime proof.')
+        assert returned_file_refs==108
+        print(f'PASS: {case} ARM64 split-VMA cases + 4 boundary BUG guards + 2 callback CFI guards + {returned_file_refs} same-object stock fput returns; routes={counts}; old/new bounds/pgoff/seq, cleanup and pre-update adjust')
+        print('may_split/open and inline get_file execute in stock; same-object fput restores original 17 references. Close caller not executed. Callback bodies, VMA dup/free, anon clone, tree, locks and adjust modeled. No MMU or concurrent refcount/lifetime proof.')
 
 
 if __name__=='__main__':

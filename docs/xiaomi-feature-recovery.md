@@ -296,6 +296,16 @@ Isso comprova execução real da **integração de fontes**, não apenas mock ou
 
 `validate-dmabuf-root-build.rb` passou com quatro negativos: controle adulterado, cancelamento, write permission, etapa ABI removida/device command. Bash -n de todos os blocos e compile dos três Python heredocs passaram. Sete unit gates root e cinco ELF/config gates passaram novamente. Workflow preparado **não é evidência de compilação concluída**; MMU/SMP/hardware, produtor/unwind e restante do lifetime continuam pendentes.
 
+### Devolução da referência de arquivo: fput stock
+
+Fontes ACK pinadas em `outputs/stock-ack-dma-file-lifetime-reference-20261006`: fs/file_table.c SHA1 blob 234284ef72a9a5b22cec70f0d45009b9b686df00/SHA256 1e80b584d85be578964e4f7988e669ef534278c25a5b5eb03565e03754a32519; fs.h/sched.h também verificados por Git blob/SHA256 no commit f7ebe251. `test-dmabuf-stock-file-put.py` executa o corpo ARM64 exato de fput, validando protótipo/layout BTF transitive de file.f_count/f_rcuhead/f_llist, callback_head, task flags e thread_info preempt_count. 280 inputs: referências 1/2/17/18/LONG_MAX, preemption/interrupt masks, kernel thread, sucesso/falha task_work_add e lista delayed vazia/ocupada. Buffer completo de file e argumentos/order comparados com oráculo delimitado; contador sempre decrementa uma vez. Referências restantes retornam sem enqueue; última referência agenda task-work ou delayed fallback. Falha task-work evita leak por fallback; delayed work só agendado quando lista passa a não-vazia. 18 drops adicionais resultam em um único task-work no último drop; zero-ref fput não é input válido. __fput/____fput síncrono proibido no fixture.
+
+Queue/task-work/workqueue bodies modelados; system_wq é contexto runtime privado explícito e delayed_fput_list é BSS **não extraído**. Não executa destruição final nem prova fila/concurrency real. Fixture split-VMA agora executa stock fput sobre o **mesmo file** que recebeu get_file inline: 108 sucessos com file retornam de 18 para os 17 holders originais, sem mudar outros bytes/callbacks nem agendar liberação. Não é close caller real; restante de close/fput final/VM free/RCU e lifetime ainda pendente. 1.152 casos split, quatro boundary/two CFI guards, 108 returns e 280 fput cases passaram. Nenhuma recipe/produção alterada.
+
+### Primeiro resultado de compilação: DMA disabled
+
+Run 37406739074/head 96eaa013...: job **compile (disabled, n) success**, incluindo Check compiled providers. Artifact dma-audit-disabled-1 baixado em `outputs/dma-disabled-build-audit-37406739074`; providers.json exige enabled=n, providers vazio e OFFLINE_BUILD_SHAPE_ONLY. Hash do config conferido independentemente e manifest de overlay idêntico ao canônico local. Gate inclui geometria ARM64/4K/VA39/3levels/split locks e THP. Isso prova build disabled sem os dez DMA functions/quatro counters, não equivalência runtime integral ao stock. Perfil enabled iniciou Fetch pinned ACK; build composto 37408379865 segue pending, aguardando controle completo verde. Nenhum restart/device/flash.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.
