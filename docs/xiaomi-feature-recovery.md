@@ -12,7 +12,7 @@ Ferramenta `scripts/recover-stock-features.py`: somente lê entradas; preserva b
 
 |Família|Símbolos candidatos|Referências BL|Estado|
 |---|---|---|---|
-|DMA-BUF huge pages|14|68|3 wrappers recuperados, 3.000 testes de rotas; ownership/locks/map/unmap ainda incompletos|
+|DMA-BUF huge pages|14|68|3 wrappers + split PMD recuperados/testados em emulação; ownership/locks/map/unmap ainda incompletos|
 |XRING LB|63|340|Interface ioctl parcialmente recuperada; handlers ainda não reimplementados|
 |F2FS fastdiscard|5|1|Inclui atributos; caminhos genéricos ainda precisam ser rastreados|
 |SCSI fastdiscard|0|0|CONFIG stock ativa; falta rastrear alterações nas funções genéricas|
@@ -92,6 +92,12 @@ A análise C preserva os efeitos do binário. O overlay experimental difere expl
 `dmabuf_huge_wrappers.recovered.c` recupera `vma_adjust_dmabuf_huge`, `split_dmabuf_huge_pmd_address`, `zap_split_dmabuf_huge_pmd`. Comparação com ARM64 stock: 3.000 casos, bordas de 2 MiB, end/start, adj_next positivo/zero/negativo, lookup PMD falhando, argumento freeze verdadeiro/falso e folio NULL/não NULL. As duas wrappers repassam **false** a `__split_dmabuf_huge_pmd` independentemente de freeze recebido, conforme instruções.
 
 Teste intercepta `mm_find_pmd`, `find_vma` e split para registrar rotas/argumentos; não prova os helpers, MMU, TLB, locks ou ownership. BTF de vm_start/end está em union/struct anônimo, offsets transitivos validados (0/8/16 para start/end/mm). `adj_next>0` exige vma e next válidos: stock lê next antes de testar NULL; callers ainda precisam ser recuperados. Não há patch MM instalável.
+
+`dmabuf_huge_split.recovered.c` recupera `__split_dmabuf_huge_pmd`: ordem notifier start → PMD lock → teste de PMD/folio → withdraw da tabela depositada → invalidate → 512 PTEs → barreira → publicação PMD → contador → unlock → notifier end. Withdraw acontece antes de invalidate neste stock; não copiar a ordem do THP anônimo genérico como se fosse equivalente. PTEs herdam proteção VMA, WRITE/AF/dirty e marca special, com contiguity removida por set_pte_at. Bits/calls cotejados com instruções e headers ACK exatos, não inferidos só pelo pseudocódigo.
+
+`test-dmabuf-stock-split.py`: 1.000 casos confirmados, comparando todos os 4.096 bytes da tabela, PMD, contador (incl. wrap), guardas folio/compound head, chamadas e sequência dsb/isb/dmb. Inclui PMD present/PROT_NONE/present-invalid/table/zero e flags WRITE/AF/dirty/CONT. Protótipo/enum/layouts conferidos no BTF. Helpers MM/TLB/lock modelados; execução usa instruções reais para stores/atomics/barreiras, **não** prova efeito delas na MMU/cache/coerência. BSS dos contadores/system_cpucaps explicitamente modelado, não fingido como bytes extraídos. ARM64 alternatives do Image permanecem sem patches de boot; validar variante efetiva do aparelho ainda pendente.
+
+Fontes de interface em `outputs/stock-ack-mm-reference-20261005`, `stock-ack-mm-interfaces-20261005`, `stock-ack-pgalloc-reference-20261005`: commit ACK exato e cada payload Git blob/SHA256 verificado. Recurso inteiro continua incompleto: remap, range walker, move/zap, lock e hooks/callers/lifetime por recuperar.
 
 ## Verificação executada
 

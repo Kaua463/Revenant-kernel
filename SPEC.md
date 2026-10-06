@@ -62,6 +62,7 @@ V36 | Decompiler runs ! selected-count/status/log validation, BTF signatures for
 V37 | Recovered EROFS update ! transitive BTF field names/offsets, exact-stock ARM64 differential tests for size/time boundaries, rolling windows, overflows & disabled state; host/emulation ≠ SMP/lifecycle/hardware proof.
 V38 | EROFS overlay ! exact ACK source hashes & unique anchors, clean patch round-trip, explicit safety deviations; freed stock pointer ≠ approved production behavior; BLOCKED_NOT_INSTALLABLE until Kbuild/KMI/lifetime/SMP/hardware gates pass.
 V39 | MM recovery ! transitive/anonymous BTF offsets & prototype checks; helper-trace differential tests prove wrapper routing only, not page-table/TLB/lock semantics; no MM install before full safety gates.
+V40 | MM split emulation ! distinguish file-backed Image bytes from BSS; model BSS as explicit private context, never extracted bytes; compare PTE/PMD/counter writes & barrier order separately from MMU/TLB/SMP proof.
 
 ## §T
 
@@ -136,3 +137,4 @@ V39 | MM recovery ! transitive/anonymous BTF offsets & prototype checks; helper-
 | B42 | Sysfs fixture ctypes call rejected before execution | Declared five integer args, wrapper takes four | Match exact host prototype; strict call gate retained; no production change |
 | B43 | Overlay generator aborts on internal.h anchor | domain_id ending appears in multiple structs | V38 requires full unique struct-tail anchor; preserve fail-closed behavior |
 | B44 | MM fixture cannot find vm_start in top-level BTF members | Stock nests start/end in anonymous union/struct | V39 flattens anonymous offsets transitively, rejects conflicting names; unit tests cover nesting/base offset/ambiguity |
+| B45 | Split fixture accesses unmapped counter/system_cpucaps | Both globals reside in BSS beyond file-backed Image | V40 checks B symbols and absent spans; map explicit private BSS pages, not fake stock payload; raw CPU alternatives remain unpatched |
