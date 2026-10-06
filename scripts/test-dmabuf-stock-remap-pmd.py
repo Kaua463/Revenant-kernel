@@ -258,6 +258,8 @@ def real_helper_fixture(image_path,kernel):
 
 
 def run(args):
+    if args.free_split_tables and args.teardown not in ('split-unmap','cross-move-split-unmap'):
+        raise ValueError('--free-split-tables requires a split-unmap chain')
     from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
     from unicorn.arm64_const import (UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3,UC_ARM64_REG_X4,UC_ARM64_REG_X5,UC_ARM64_REG_X30,UC_ARM64_REG_SP,UC_ARM64_REG_SP_EL0,UC_ARM64_REG_PC)
     image=args.image.read_bytes();contract=load('verify-stock-recovered-contracts.py')
@@ -269,9 +271,33 @@ def run(args):
     ident=next(i for i,t in enumerate(btf.types) if t['kind']==4 and t['name']=='mmu_gather')
     assert btf.types[ident]['size']==128
     found=fields(btf,ident)
-    for member,offset in {'mm':0,'start':16,'end':24}.items():assert found[member]==offset
+    for member,offset in {'mm':0,'batch':8,'start':16,'end':24,'active':40,'local':48}.items():assert found[member]==offset
+    batch_type=next(i for i,t in enumerate(btf.types) if t['kind']==4 and t['name']=='mmu_table_batch')
+    assert btf.types[batch_type]['size']==24
+    batch_fields=fields(btf,batch_type)
+    for member,offset in {'rcu':0,'nr':16,'tables':24}.items():assert batch_fields[member]==offset
+    for option in ('CONFIG_MMU_GATHER_TABLE_FREE','CONFIG_MMU_GATHER_RCU_TABLE_FREE'):
+        assert kernel.cfg[option]=='y'
     raw=btf.types[ident]['raw'];cleared=next(raw[i+2] for i in range(0,len(raw),3) if btf.string(raw[i])=='cleared_pmds')
     assert cleared&0xffffff==261 and cleared>>24==1
+    cleared_ptes=next(raw[i+2] for i in range(0,len(raw),3) if btf.string(raw[i])=='cleared_ptes')
+    assert cleared_ptes&0xffffff==260 and cleared_ptes>>24==1
+    vma_type=next(i for i,t in enumerate(btf.types) if t['kind']==4 and t['name']=='vm_area_struct')
+    assert fields(btf,vma_type)['vm_ops']==112
+    unmap_proto=btf.types[next(t for t in btf.types if t['kind']==12 and t['name']=='unmap_page_range')['size']]
+    assert unmap_proto['size']==0 and len(unmap_proto['raw'])==10
+    for i,name in enumerate(('mmu_gather','vm_area_struct','unsigned long','unsigned long','zap_details')):
+        typ=btf.types[unmap_proto['raw'][i*2+1]]
+        if i in (0,1,4):assert typ['kind']==2;typ=btf.types[typ['size']]
+        assert typ['name']==name
+    free_proto=btf.types[next(t for t in btf.types if t['kind']==12 and t['name']=='free_pgd_range')['size']]
+    assert free_proto['size']==0 and len(free_proto['raw'])==10
+    for i,name in enumerate(('mmu_gather','unsigned long','unsigned long','unsigned long','unsigned long')):
+        typ=btf.types[free_proto['raw'][i*2+1]]
+        if i==0:assert typ['kind']==2;typ=btf.types[typ['size']]
+        assert typ['name']==name
+    freed_tables=next(raw[i+2] for i in range(0,len(raw),3) if btf.string(raw[i])=='freed_tables')
+    assert freed_tables&0xffffff==258 and freed_tables>>24==1
     func=next(t for t in btf.types if t['kind']==12 and t['name']=='__mod_lruvec_page_state');proto=btf.types[func['size']];delta=btf.types[proto['raw'][5]]
     assert delta['kind']==1 and delta['name']=='int' and delta['size']==4
     for name,required in {'vm_area_struct':{'vm_file':128,'anon_vma':104,'vm_page_prot':24},'mm_struct':{'context':0x3c8,'notifier_subscriptions':0x420},'mmu_notifier_range':{'mm':0,'start':8,'end':16,'flags':24,'event':28,'owner':32}}.items():
@@ -311,10 +337,24 @@ def run(args):
         funcs[kernel.address('__free_pages')]=11;funcs[kernel.address('pgtable_trans_huge_withdraw')]=12
         funcs[kernel.address('__sync_icache_dcache')]=13
         funcs[kernel.address('pmdp_invalidate')]=15
+        funcs[kernel.address('__pte_offset_map_lock')]=16
+        funcs[kernel.address('flush_tlb_batched_pending')]=17
+        funcs[kernel.address('__rcu_read_unlock')]=18
+        tlb_flush=0xffffffc080330950
+        assert any(line.split()[-1]=='tlb_flush_mmu_tlbonly' and int(line.split()[0],16)==tlb_flush for line in args.symbols.read_text().splitlines())
+        funcs[tlb_flush]=19
+        funcs[kernel.address('tlb_remove_table')]=20
+        funcs[kernel.address('__get_free_pages')]=21;funcs[kernel.address('call_rcu')]=22
+        funcs[kernel.address('free_page_and_swap_cache')]=23;funcs[kernel.address('free_pages')]=24
+        table_flush=0xffffffc08033cafc
+        assert any(line.split()[-1]=='tlb_flush_mmu_tlbonly' and int(line.split()[0],16)==table_flush for line in args.symbols.read_text().splitlines())
+        funcs[table_flush]=25
+        forbidden_unmap={kernel.address(n) for n in ('__tlb_remove_folio_pages','folio_remove_rmap_ptes','percpu_counter_add_batch','print_bad_pte')}
         def hook(emu,address,size,user):
+            assert not (state.get('unmap') and address in forbidden_unmap),'SPECIAL PFNMAP unmap entered a backing-page/RSS error path'
             if address in funcs:
                 op=funcs[address];x=[emu.reg_read(r) for r in (UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3)]
-                trace.append((op,*[x[i]&0xffffffff if op==5 and i==2 else x[i] if i<({1:1,2:1,3:3,4:4,5:3,6:1,7:3,8:3,9:1,11:2,12:2,13:1,15:3}[op]) else 0 for i in range(4)]))
+                trace.append((op,*[x[i]&0xffffffff if op==5 and i==2 else x[i] if i<({1:1,2:1,3:3,4:4,5:3,6:1,7:3,8:3,9:1,11:2,12:2,13:1,15:3,16:4,17:1,18:0,19:1,20:2,21:2,22:2,23:1,24:2,25:1}[op]) else 0 for i in range(4)]))
                 result=0
                 if op in (7,8,12):return # Observe calls, execute original stock helpers.
                 if op==3:
@@ -323,13 +363,47 @@ def run(args):
                 elif op==4:
                     state['allocs']+=1;result=0 if state['allocs']==state['fail']-1 else pages+(state['allocs']-1)*64
                 elif op in (6,9):
-                    assert x[0] in (pmd_metadata+40,pmd_metadata+104)
-                    emu.mem_write(x[0],struct.pack('<I',op==6))
+                    if state.get('unmap'):
+                        assert op==9 and x[0]==state['pte_lock'] and state['pte_locked']
+                        state['pte_locked']=False
+                    else:
+                        assert x[0] in (pmd_metadata+40,pmd_metadata+104)
+                        emu.mem_write(x[0],struct.pack('<I',op==6))
                 elif op==11:
+                    assert not state.get('unmap'),'SPECIAL unmap must not free table/backing page'
                     assert pages<=x[0]<pages+512 and (x[0]-pages)%64==0 and x[1]==0
                     assert x[0] not in state['freed'],'double free in chain';state['freed'].add(x[0])
                 elif op==15:
                     result=struct.unpack('<Q',emu.mem_read(x[2],8))[0];emu.mem_write(x[2],struct.pack('<Q',result&~1))
+                elif op==16:
+                    assert state.get('unmap') and x[0]==mm and not state['pte_locked']
+                    entry=struct.unpack('<Q',emu.mem_read(x[1],8))[0];assert entry&3==3
+                    slot=((entry&0x7ffffff000)-0x1400000)>>12;assert 0<=slot<8
+                    state['pte_lock']=pages+slot*64+40;state['pte_locked']=True
+                    emu.mem_write(x[3],struct.pack('<Q',state['pte_lock']))
+                    result=pte_tables+slot*4096+((x[2]>>12)&511)*8
+                elif op==17:assert state.get('unmap') and x[0]==mm
+                elif op==18:assert state.get('unmap') and not state['pte_locked']
+                elif op==19:assert state.get('unmap') and x[0]==ram+0x7000
+                elif op==20:
+                    assert state.get('table_free') and x[0]==ram+0x7000 and x[1]==state['expected_table']
+                    assert x[1] not in state['queued'],'duplicate deferred table removal'
+                    assert not struct.unpack('<Q',emu.mem_read(state['expected_pmd'],8))[0],'queue after PMD clear'
+                    state['queued'].add(x[1])
+                    return # Queue using the original stock batch code, not a stub.
+                elif op==21:
+                    assert state.get('table_free') and x[:2]==[0x2800,0]
+                    result=ram+0x12000;emu.mem_write(result,b'\xa5'*4096)
+                elif op==22:
+                    assert state.get('table_free') and x[:2]==[ram+0x12000,kernel.address('tlb_remove_table_rcu')]
+                    assert not state['callback_pending'];state['callback_pending']=True
+                elif op==23:
+                    assert state.get('callback_running') and x[0]==state['expected_table']
+                    assert x[0] not in state['rcu_freed'],'duplicate RCU table release'
+                    state['rcu_freed'].add(x[0])
+                elif op==24:
+                    assert state.get('callback_running') and x[:2]==[ram+0x12000,0]
+                elif op==25:assert state.get('table_free') and x[0]==ram+0x7000
                 emu.reg_write(UC_ARM64_REG_X0,result);emu.reg_write(UC_ARM64_REG_PC,emu.reg_read(UC_ARM64_REG_X30))
             elif kernel.base<=address<kernel.base+len(image):
                 word=struct.unpack_from('<I',image,address-kernel.base)[0]
@@ -357,7 +431,7 @@ def run(args):
             allocated={pages+i*64 for i in range(mapped)}
             assert old|new==allocated-removed,('lost/extra deposited table',old,new,allocated,removed)
             return old,new
-        cases=withdrawals=partial_chains=repeated_zaps=moves=splits=repeated_splits=0;coverage={'multi_success':0,'partial_failure':0,'cow_reject':0,'bug':0}
+        cases=withdrawals=partial_chains=repeated_zaps=moves=splits=repeated_splits=unmaps=cleared_entries=queued_tables=0;coverage={'multi_success':0,'partial_failure':0,'cow_reject':0,'bug':0}
         for case in range(216):
             address=(1<<21)+(4096 if case%9==0 else 0)
             size=(1,4096,1<<21,(1<<21)+4096,3<<21,0)[case%6]
@@ -373,7 +447,7 @@ def run(args):
             uc.mem_write(mm+224,struct.pack('<I',7));uc.mem_write(direct,bytes(8192))
             page_data=bytearray(b'\xa5'*512)
             for i in range(8):struct.pack_into('<Q',page_data,i*64,0)
-            uc.mem_write(pages,bytes(page_data));trace.clear();state.update(fail=values[7],allocs=0,bug=0,freed=set())
+            uc.mem_write(pages,bytes(page_data));trace.clear();state.update(fail=values[7],allocs=0,bug=0,freed=set(),unmap=False,table_free=False,queued=set(),rcu_freed=set(),callback_pending=False,callback_running=False)
             desc=bytearray(b'\xa5'*128)
             for block in (0,64):desc[block+16:block+24]=bytes(8);desc[block+40:block+44]=bytes(4)
             uc.mem_write(pmd_metadata,bytes(desc))
@@ -399,9 +473,9 @@ def run(args):
             if not out[7]:
                 seen=set();index=(address>>21)&511
                 check_pool(mapped,set())
-                if args.teardown in ('zap','move-zap','cross-move-zap','split','cross-move-split'):
+                if args.teardown in ('zap','move-zap','cross-move-zap','split','cross-move-split','split-unmap','cross-move-split-unmap'):
                     moved_index=index
-                    if args.teardown in ('move-zap','cross-move-zap','cross-move-split'):
+                    if args.teardown in ('move-zap','cross-move-zap','cross-move-split','cross-move-split-unmap'):
                         moved_index=128 if args.teardown=='move-zap' else 640;uc.mem_write(mm+0x3c8,bytes(8));uc.mem_write(mm+0x420,bytes(8));uc.mem_write(cap,bytes(16))
                         for step in range(mapped):
                             old_addr=address+step*(1<<21);new_addr=(moved_index+step)*(1<<21)
@@ -423,9 +497,9 @@ def run(args):
                                 assert struct.unpack('<Q',uc.mem_read(pmd_metadata+80,8))[0]!=0,('destination deposit owner',case,step)
                                 if step==mapped-1:assert struct.unpack('<Q',uc.mem_read(pmd_metadata+16,8))[0]==0,('source deposit drained by move',case)
                             old_pool,new_pool=check_pool(mapped,set())
-                            if args.teardown in ('cross-move-zap','cross-move-split'):assert len(old_pool)==mapped-step-1 and len(new_pool)==step+1,('per-owner transfer count',case,step)
+                            if args.teardown in ('cross-move-zap','cross-move-split','cross-move-split-unmap'):assert len(old_pool)==mapped-step-1 and len(new_pool)==step+1,('per-owner transfer count',case,step)
                             moves+=1
-                    if args.teardown in ('split','cross-move-split'):
+                    if args.teardown in ('split','cross-move-split','split-unmap','cross-move-split-unmap'):
                         host.host_split_reset();split_count=kernel.address('dmabuf_hugetlb_pmd_split');assert kernel.span('dmabuf_hugetlb_pmd_split') is None;uc.mem_write(split_count,bytes(8));uc.mem_write(pte_tables,bytes(32768));uc.mem_write(mm+0x420,bytes(8));uc.mem_write(vma+24,struct.pack('<Q',values[11]));uc.mem_write(cap,bytes(16));converted=set()
                         for step in range(mapped+bool(mapped)):
                             at=moved_index+min(step,mapped-1);addr=at*(1<<21);split_out=(ctypes.c_uint64*1027)();split_rows=(ctypes.c_uint64*(1600*5))();split_meta=(ctypes.c_ubyte*640)();split_ptes=(ctypes.c_ubyte*32768)()
@@ -449,6 +523,89 @@ def run(args):
                             assert all((ptes[i]&0xfffffffff000)==(ptes[0]&0xfffffffff000)+i*4096 for i in range(512)),('PTE physical progression',case,step)
                             splits+=step<mapped;repeated_splits+=step==mapped
                         assert len(converted)==mapped and not state['freed'],'split converts tables, does not free them';check_pool(mapped,converted)
+                        if args.teardown in ('split-unmap','cross-move-split-unmap'):
+                            # Keep actual split-produced PTEs and descriptors. Only
+                            # the lookup/lock/RCU/flush interfaces are modeled here.
+                            uc.mem_write(pgd,struct.pack('<2Q',0x1000003,0x1001003))
+                            uc.mem_write(vma+112,bytes(8));state.update(unmap=True,pte_locked=False)
+                            frozen_pmds=bytes(uc.mem_read(direct,8192));frozen_meta=bytes(uc.mem_read(pages,512))+bytes(uc.mem_read(pmd_metadata,128))
+                            expected_ptes=bytearray(uc.mem_read(pte_tables,32768));tlb=ram+0x7000
+                            for offset in range(mapped):
+                                at=moved_index+offset;base_addr=at*(1<<21)
+                                entry=struct.unpack('<Q',uc.mem_read(direct+at*8,8))[0];slot=((entry&0x7ffffff000)-0x1400000)>>12
+                                # Single page, middle partial range, whole table,
+                                # then repeat on the already-empty same table.
+                                for lo,hi in ((0,1),(17,257),(0,512),(0,512)):
+                                    start,end=base_addr+lo*4096,base_addr+hi*4096
+                                    changed=[]
+                                    for index_pte in range(lo,hi):
+                                        pos=slot*4096+index_pte*8
+                                        if struct.unpack_from('<Q',expected_ptes,pos)[0]:changed.append(base_addr+index_pte*4096)
+                                        expected_ptes[pos:pos+8]=bytes(8)
+                                    gather=bytearray(128);struct.pack_into('<Q',gather,0,mm);struct.pack_into('<Q',gather,16,(1<<64)-1)
+                                    uc.mem_write(tlb,bytes(gather));trace.clear()
+                                    for r,v in zip((UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3,UC_ARM64_REG_X4),(tlb,vma,start,end,0)):uc.reg_write(r,v)
+                                    uc.reg_write(UC_ARM64_REG_X30,stop);uc.reg_write(UC_ARM64_REG_SP,stack)
+                                    uc.emu_start(kernel.address('unmap_page_range'),stop,count=200000)
+                                    assert not state['bug'] and uc.reg_read(UC_ARM64_REG_PC)==stop,('unmap termination',case,offset,lo,hi)
+                                    assert bytes(uc.mem_read(pte_tables,32768))==bytes(expected_ptes),('split PTE removal',case,offset,lo,hi)
+                                    assert bytes(uc.mem_read(direct,8192))==frozen_pmds,'unmap leaves table PMDs allocated'
+                                    assert bytes(uc.mem_read(pages,512))+bytes(uc.mem_read(pmd_metadata,128))==frozen_meta,'unmap leaves table metadata intact'
+                                    assert struct.unpack('<Q',uc.mem_read(mm+128,8))[0]==out[4] and not state['freed'],'unmap must not free/account page tables'
+                                    ops=[row[0] for row in trace if row[0]!=10]
+                                    assert ops==[16,17,9,18,19] and not state['pte_locked'],('SPECIAL unmap helpers',case,ops)
+                                    got_range=struct.unpack('<2Q',uc.mem_read(tlb+16,16))
+                                    assert got_range==((min(changed),max(changed)+4096) if changed else ((1<<64)-1,0)),('unmap gather range',case,got_range,changed[:2])
+                                    assert struct.unpack('<H',uc.mem_read(tlb+32,2))[0]==(0x400|(0x10 if changed else 0)),('unmap gather flags',case)
+                                    unmaps+=1;cleared_entries+=len(changed)
+                            state['unmap']=False
+                            if args.free_split_tables:
+                                # Execute original queue/flush/callback bodies.
+                                # Allocator and grace period remain modeled.
+                                expected_pmds=bytearray(frozen_pmds);expected_meta=bytearray(frozen_meta)
+                                for offset in range(mapped):
+                                    at=moved_index+offset;addr=at*(1<<21)
+                                    entry=struct.unpack_from('<Q',expected_pmds,at*8)[0];slot=((entry&0x7ffffff000)-0x1400000)>>12;page=pages+slot*64
+                                    for repeat in (False,True):
+                                        gather=bytearray(128);struct.pack_into('<Q',gather,0,mm);struct.pack_into('<Q',gather,16,(1<<64)-1)
+                                        uc.mem_write(tlb,bytes(gather));trace.clear();state.update(table_free=True,expected_table=page,expected_pmd=direct+at*8)
+                                        for r,v in zip((UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3,UC_ARM64_REG_X4),(tlb,addr,addr+(1<<21),addr,addr+(1<<21))):uc.reg_write(r,v)
+                                        uc.reg_write(UC_ARM64_REG_X30,stop);uc.reg_write(UC_ARM64_REG_SP,stack)
+                                        uc.emu_start(kernel.address('free_pgd_range'),stop,count=100000)
+                                        assert not state['bug'] and uc.reg_read(UC_ARM64_REG_PC)==stop,('table removal termination',case,offset,repeat)
+                                        if not repeat:
+                                            expected_pmds[at*8:at*8+8]=bytes(8)
+                                            old_type=struct.unpack_from('<I',expected_meta,slot*64+48)[0];struct.pack_into('<I',expected_meta,slot*64+48,old_type|0x200)
+                                            assert [row[0] for row in trace if row[0]!=10]==[5,20,21],('table destructor/queue order',case,trace)
+                                            assert next(row for row in trace if row[0]==5)[1:4]==(page,39,0xffffffff),'page-table zone accounting'
+                                            queued_tables+=1
+                                        else:assert not trace,('repeated free must be inert',case,trace)
+                                        assert bytes(uc.mem_read(direct,8192))==bytes(expected_pmds),'table PMD clearing'
+                                        assert bytes(uc.mem_read(pages,512))+bytes(uc.mem_read(pmd_metadata,128))==bytes(expected_meta),'table destructor metadata'
+                                        assert struct.unpack('<Q',uc.mem_read(mm+128,8))[0]==(out[4]-(offset+1)*4096)&((1<<64)-1),'table count decrement exactly once'
+                                        assert struct.unpack('<2Q',uc.mem_read(tlb+16,16))==(((1<<64)-1,0) if repeat else (addr,addr+4096)),'table gather extent'
+                                        assert struct.unpack('<H',uc.mem_read(tlb+32,2))[0]==(0 if repeat else 0x24),'table gather flags'
+                                        if not repeat:
+                                            batch=ram+0x12000
+                                            assert struct.unpack('<Q',uc.mem_read(tlb+8,8))[0]==batch
+                                            assert struct.unpack('<I',uc.mem_read(batch+16,4))[0]==1
+                                            assert struct.unpack('<Q',uc.mem_read(batch+24,8))[0]==page
+                                            assert page not in state['rcu_freed'] and not state['callback_pending'],'no free before flush/RCU'
+                                            trace.clear();uc.reg_write(UC_ARM64_REG_X0,tlb);uc.reg_write(UC_ARM64_REG_X30,stop);uc.reg_write(UC_ARM64_REG_SP,stack)
+                                            uc.emu_start(kernel.address('tlb_flush_mmu'),stop,count=100000)
+                                            assert uc.reg_read(UC_ARM64_REG_PC)==stop and [row[0] for row in trace]==[25,25,22]
+                                            assert state['callback_pending'] and page not in state['rcu_freed'],'callback is deferred'
+                                            assert not struct.unpack('<Q',uc.mem_read(tlb+8,8))[0]
+                                            # Test driver advances a modeled grace
+                                            # period; never claims real RCU/SMP.
+                                            state.update(callback_running=True,callback_pending=False);trace.clear()
+                                            uc.reg_write(UC_ARM64_REG_X0,batch);uc.reg_write(UC_ARM64_REG_X30,stop);uc.reg_write(UC_ARM64_REG_SP,stack)
+                                            uc.emu_start(kernel.address('tlb_remove_table_rcu'),stop,count=100000)
+                                            assert uc.reg_read(UC_ARM64_REG_PC)==stop and [row[0] for row in trace]==[23,24]
+                                            state['callback_running']=False
+                                assert state['queued']==converted==state['rcu_freed'] and not state['freed'],'every table queued/released exactly once through RCU model'
+                                assert struct.unpack('<Q',uc.mem_read(mm+128,8))[0]==values[4],'restore pre-remap page-table accounting'
+                                state['table_free']=False
                         partial_chains+=bool(mapped and out[0]==0xfffffff4);cases+=1;continue
                     tlb=ram+0x7000;zap_count=kernel.address('dmabuf_hugetlb_pmd_zap');assert kernel.span('dmabuf_hugetlb_pmd_zap') is None
                     uc.mem_write(zap_count,bytes(8));host.host_zap_reset();gather=bytearray(128);struct.pack_into('<Q',gather,0,mm);struct.pack_into('<Q',gather,16,(1<<64)-1);uc.mem_write(tlb,bytes(gather))
@@ -500,10 +657,16 @@ def run(args):
             print(f'Deposited tables freed exactly once in allocator model; {repeated_zaps} repeated zap calls return zero without freeing/accounting again. PMDs clear and pgtables_bytes restores initial value; gather/counters/metadata/helper traces compared at each step.')
         if args.teardown in ('move-zap','cross-move-zap'):
             assert moves==withdrawals;print(f'PASS: {moves} remap→{args.teardown} steps; source clears, destination mapping then tears down; owner/list checked on both PMD pages')
-        if args.teardown in ('split','cross-move-split'):
+        if args.teardown in ('split','cross-move-split','split-unmap','cross-move-split-unmap'):
             assert repeated_splits;print(f'PASS: {splits} split tables produce {splits*512} PTEs; deposit→published-table ownership, accounting preserved, no modeled free; moves={moves}, repeated split guards={repeated_splits}')
+        if args.teardown in ('split-unmap','cross-move-split-unmap'):
+            assert unmaps==splits*4 and cleared_entries==splits*512
+            print(f'PASS: {unmaps} populated/partial/repeated SPECIAL unmaps clear {cleared_entries} PTEs; table descriptors/metadata/accounting preserved. Lookup/lock/RCU/flush modeled; final page-table freeing not covered.')
+        if args.free_split_tables:
+            assert queued_tables==splits
+            print(f'PASS: {queued_tables} actual stock free_pgd_range→queue→flush→RCU callback chains and repeated guards; PMDs clear, destructor metadata/accounting restore, same table reaches modeled release exactly once. Allocator/TLB/grace period modeled; parent-table freeing not covered.')
         print('Real stock deposit/pmd_set_huge/withdraw bodies executed; native exact ACK bodies, list/owner bytes and barriers compared. Allocation/free/locks modeled; not full remap/move/split lifecycle, MMU, SMP or hardware proof.')
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--symbols',type=Path,required=True);p.add_argument('--teardown',choices=('withdraw','zap','move-zap','cross-move-zap','split','cross-move-split'),default='withdraw');run(p.parse_args())
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--symbols',type=Path,required=True);p.add_argument('--teardown',choices=('withdraw','zap','move-zap','cross-move-zap','split','cross-move-split','split-unmap','cross-move-split-unmap'),default='withdraw');p.add_argument('--free-split-tables',action='store_true');run(p.parse_args())
