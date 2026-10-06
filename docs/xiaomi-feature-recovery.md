@@ -358,6 +358,29 @@ Status permanece OFFLINE_BUILD_SHAPE_ONLY. Composto root 37408379865 ainda
 in_progress, step Fetch exact ACK and root integration sources no snapshot.
 Build isolado verde não prova KMI composto, produtor real, MMU/SMP ou hardware.
 
+### Integração e Kbuild separados do produtor de VM
+
+`prepare-dmabuf-runtime-audit.py` valida novamente patch/recipes canônicos nos
+11 inputs pristine; exige 12 postimages DMA exatos no target e quatro SHA256
+de produtor/header/Kconfig/Makefile. Escreve somente seis paths de auditoria
+(quatro arquivos novos + append em mm/Kconfig/Makefile). Recusa destination
+existente, symlink inclusive parent, drift em inputs e evidência preexistente;
+dry-run não escreve no target. Gate cobre estes inputs, não árvore completa
+nem callers GPU. Seis testes em fixtures descartáveis passaram: dry-run,
+apply/repeat, target drift, reference drift, destination/symlink/evidence.
+
+Workflow novo `audit-rodin-dma-producer.yml` separado: ACK tag/object/commit
+exatos, baseline DMA enabled e producer bool=y, Kbuild real LTO none/4K,
+config e três objetos audit_fops/devices obrigatórios no ELF. Apenas logs,
+config e JSON de evidência são uploaded; sem Image/installer/phone/flash.
+Concurrency shared com audits anteriores, cancel=false. Não altera workflow
+shipping nem perfil composto root. YAML/Bash de todos os steps e Python do
+auditor ELF parseados; source-policy seis testes e integration seis passaram.
+Kbuild do produtor e guest runtime continuam pendentes, não declarados verdes.
+Headers page_to_phys ARM64 verificados no ACK exato em
+outputs/stock-ack-dma-physical-api-reference-20261006; definido em asm/memory.h,
+incluído por asm/pgtable.h usado pelo producer. Sem ajuste adivinhado de API.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

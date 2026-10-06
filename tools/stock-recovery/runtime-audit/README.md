@@ -54,11 +54,19 @@ PMD under mmap write lock, and rejects even preallocated PTE tables. It invokes
 the recovered mapper unchanged. It keeps vm_file and adds no VMA callbacks or
 extra VMA references. No ioctl/read/write/physical-address interface exists.
 
-Kconfig/Makefile are **not sourced by any kernel tree or workflow**. Their
-built-in, default-off option is for a future disposable ARM64 VM build only;
+Kconfig/Makefile are **not sourced by any shipping kernel tree or workflow**. Their
+built-in, default-off option is for a disposable ARM64 VM build only;
 the C guards also reject module, wrong geometry or missing recovered feature.
-No shipping overlay/config has changed. Separate compile/integration and guest
-MMU/SMP workload, fault injection and full unwind verification are still pending.
+No shipping overlay/config has changed. `prepare-dmabuf-runtime-audit.py` gates
+all pristine reference hashes/canonical recipes, all post-DMA inputs and four
+producer source pins before adding six paths in a disposable tree. Drift,
+symlinks, existing destination/evidence and repeated application fail closed.
+`test-dmabuf-runtime-integration.py` covers those conditions in temporary trees.
+The separate `audit-rodin-dma-producer.yml` compiles built-in on exact ACK,
+requires config plus producer objects in vmlinux, and uploads evidence only.
+It shares the existing audit concurrency group and never cancels a live audit.
+Compile results and guest MMU/SMP workload, fault injection and full unwind
+verification are still pending. The workflow does not boot or publish a VM image.
 
 ```sh
 python3 scripts/test-dmabuf-runtime-producer-source.py
