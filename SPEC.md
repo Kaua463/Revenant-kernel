@@ -58,6 +58,10 @@ V32 | Stock signed system_dlkm modules ! cryptographic verification against pinn
 V33 | ABI/signature audits read-only; input module bytes incl. signature trailers unchanged; test signed ELF preservation.
 V34 | Rodin sideband=n → exclude only six xhci_sideband exports from KMI lists after verifying no stock module import; source drift or required import blocks edits; strict KMI gate retained.
 V35 | Stock recovery ! pinned boot/Image/kallsyms hashes, BTF layouts & instruction evidence; inferred spans/direct calls ≠ complete semantics; built-in features ≠ standalone modules; historical candidate ≠ current build; no stubs/forced loading.
+V36 | Decompiler runs ! selected-count/status/log validation, BTF signatures for supported types & noreturn context; script exit 0 alone ≠ success; truncated/bad-flow output remains unverified; unsupported signature aborts, never substitutes guessed type.
+V37 | Recovered EROFS update ! transitive BTF field names/offsets, exact-stock ARM64 differential tests for size/time boundaries, rolling windows, overflows & disabled state; host/emulation ≠ SMP/lifecycle/hardware proof.
+V38 | EROFS overlay ! exact ACK source hashes & unique anchors, clean patch round-trip, explicit safety deviations; freed stock pointer ≠ approved production behavior; BLOCKED_NOT_INSTALLABLE until Kbuild/KMI/lifetime/SMP/hardware gates pass.
+V39 | MM recovery ! transitive/anonymous BTF offsets & prototype checks; helper-trace differential tests prove wrapper routing only, not page-table/TLB/lock semantics; no MM install before full safety gates.
 
 ## §T
 
@@ -125,3 +129,10 @@ V35 | Stock recovery ! pinned boot/Image/kallsyms hashes, BTF layouts & instruct
 | B35 | Run 34551018761 boots without Wi-Fi/Bluetooth; user reports slowdown | Stock rfkill/bluetooth providers unavailable; candidate omits certificate verifying all 78 stock system_dlkm modules. Slowdown cause unresolved | V32 restores pinned public trust anchor; keep hardware gate pending |
 | B36 | Local audited module copies lose signature trailers | objcopy --dump-section without output rewrites input | V33 read-only ELF section parser plus byte-preservation regression test |
 | B37 | Run 35816260863 fails strict KMI after compile | Stock sideband=n conflicts with generic ACK symbol lists | V34 exact six-symbol exclusion + dependency and drift tests |
+| B38 | First stock pseudocode pass reports 99 outputs despite 16 pcode warnings; typed retry aborts with exit 0 | Missing noreturn/prototype context follows CFI data; Ghidra launcher exit does not propagate script exception; array signature unsupported | V36 validates report/log, supports exact BTF array/callback types, preserves failed evidence |
+| B39 | Differential fixture fails transitive BTF check before execution | First reconstruction used guessed latency member names sum/max/count instead of sum_lat/peak_lat/bio_cnt | V37 uses actual BTF names; layout check catches mismatch before emulation |
+| B40 | Added U64_MAX boundary cannot serialize threshold into modeled stock RAM | Fixture delay+1 exceeds u64 instead of wrapping to register width | V37 masks modeled u64 fields before encoding; no production change |
+| B41 | Init host fixture fails -Werror | Replacement clock macro leaves original helper unused | Clock wrapper consumes original helper; strict host compile retained; no new invariant |
+| B42 | Sysfs fixture ctypes call rejected before execution | Declared five integer args, wrapper takes four | Match exact host prototype; strict call gate retained; no production change |
+| B43 | Overlay generator aborts on internal.h anchor | domain_id ending appears in multiple structs | V38 requires full unique struct-tail anchor; preserve fail-closed behavior |
+| B44 | MM fixture cannot find vm_start in top-level BTF members | Stock nests start/end in anonymous union/struct | V39 flattens anonymous offsets transitively, rejects conflicting names; unit tests cover nesting/base offset/ambiguity |

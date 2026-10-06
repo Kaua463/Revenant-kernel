@@ -61,7 +61,7 @@ def stock_payload(boot):
 def run(args):
     from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
     spec = importlib.util.spec_from_file_location('stock_compare',
-                                                 Path(__file__).with_name('compare-kernel-images.py'))
+                                                 Path(__file__).with_name('stock-binary-evidence.py'))
     compare = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(compare)
     if args.output.exists():

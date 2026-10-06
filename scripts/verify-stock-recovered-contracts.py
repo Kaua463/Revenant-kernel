@@ -15,7 +15,7 @@ SYMBOL_SHA = '2b7929e77d87d54a9a2385dcc1f0a262a2fe17d7226dd304d40b5fa59dd30805'
 def run(image, symbols):
     assert hashlib.sha256(image.read_bytes()).hexdigest() == IMAGE_SHA
     assert hashlib.sha256(symbols.read_bytes()).hexdigest() == SYMBOL_SHA
-    spec = importlib.util.spec_from_file_location('compare', Path(__file__).with_name('compare-kernel-images.py'))
+    spec = importlib.util.spec_from_file_location('compare', Path(__file__).with_name('stock-binary-evidence.py'))
     compare = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(compare)
     kernel = compare.Kernel(image, symbols)
