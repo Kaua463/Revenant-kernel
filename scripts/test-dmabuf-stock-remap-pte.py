@@ -67,7 +67,7 @@ def run(args):
     base.verify_btf(kernel)
     marker='/* Explicitly unsupported in this PMD-only fixture, not production stubs. */'
     assert base.FIXTURE.count(marker)==1
-    fixture=base.FIXTURE.split(marker)[0].replace('rows[128][5]','rows[4096][5]').replace('nr<128','nr<4096')+PTE_FIXTURE
+    fixture=base.real_helper_fixture(args.image,kernel).split(marker)[0].replace('rows[128][5]','rows[4096][5]').replace('nr<128','nr<4096')+PTE_FIXTURE
     code=fixture+(Path(__file__).parents[1]/'tools/stock-recovery/dmabuf_huge_remap.recovered.c').read_text()+WRAPPER
     with tempfile.TemporaryDirectory(prefix='dmabuf-remap-pte-') as tmp:
         lib=Path(tmp)/'remap.dylib';subprocess.run(['clang','-x','c','-std=c11','-Wall','-Wextra','-Werror','-dynamiclib','-o',str(lib),'-'],input=code,text=True,check=True)

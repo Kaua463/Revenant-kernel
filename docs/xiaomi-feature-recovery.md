@@ -118,7 +118,7 @@ Falha de alocação retorna -ENOMEM mantendo flags/vm_pgoff e mapeamentos anteri
 |PMD|216|Flags/seq/VMA/pgoff, PGD/PMD bytes, página depositada, contador e helpers; 33 sucessos multitrecho, 16 falhas parciais, 4 rejects COW, 45 BUGs|
 |PTE|360|Flags/seq, buffers PGD/PMD/PTE, máscaras SPECIAL/CONT, contadores e helper/barrier order; 60 sucessos multitrecho, 36 falhas parciais, 7 rejects COW, 87 BUGs, 70 casos PTE única e 96 bulk|
 
-Casos de falha variam independentemente do tamanho; asserts exigem cada categoria acima não vazia. BTF valida protótipo, anonymous fields, vm_lock_seq/mm_lock_seq, vm_lock, vm_pgoff, pgd/pgtables_bytes e ptdesc.ptl. Config verificada: ARM64 4KiB, VA39, três níveis e NUMA=n. `pte_alloc_one`, `pmd_set_huge`, alloc/map-lock/RCU permanecem modelados nesses testes (dois helpers têm comparação separada abaixo). PTE única e **contpte_set_ptes bulk agora executam instruções stock**, incluindo stores e barreiras. Não prova MMU, races, unwind/lifetime ou implementação em outra configuração.
+Casos de falha variam independentemente do tamanho; asserts exigem cada categoria acima não vazia. BTF valida protótipo, anonymous fields, vm_lock_seq/mm_lock_seq, vm_lock, vm_pgoff, pgd/pgtables_bytes e ptdesc.ptl. Config verificada: ARM64 4KiB, VA39, três níveis e NUMA=n. `pte_alloc_one`, alloc/map-lock/RCU permanecem modelados nesses testes. **Depósito e pmd_set_huge agora executam corpos stock no teste PMD**, além de suas comparações separadas abaixo. PTE única e **contpte_set_ptes bulk executam instruções stock**, incluindo stores e barreiras. Não prova MMU, races, unwind/lifetime ou implementação em outra configuração.
 
 Melhoria do teste transitive: modelo bulk inicial apenas incrementava PFNs, ocultando o efeito CONT do helper que era interceptado. Revisão de fonte ACK/pseudocódigo identificou a lacuna; modelo corrigido para grupos de 16 PTEs/64KiB e interceptação removida (chamada só observada, corpo stock executado). Mesmos 360 casos passam, com 42 casos contendo saída CONT e 157 com saída não-CONT; toda PTE nova permanece SPECIAL. Não foi necessário alterar C remap, que já chamava set_ptes real. Demais ramos contpte não usados por esses inputs continuam fora da cobertura.
 
@@ -141,6 +141,16 @@ Modelo host reproduz algoritmo ACK exato de range TLBI (SCALE/NUM/TG, remainder 
 `test-dmabuf-stock-pmd-set.py` compila corpos ACK pmd_set_huge/pgattr_change_is_safe do mmu.c com SHA256 fixo: 3.000 casos, 1.096 accepts e 1.904 rejects, PMD e barreiras comparados. Permission changes, PFN diferente, CONT, nG→global, normal/tagged e flags não permitidas. **1.095 aceitações tinham PA não alinhado a 2MiB**: VM_BUG_ON é removido por DEBUG_VM=n, confirmado no Image. Isso demonstra ausência da guarda no helper, não validade desse endereço para MMU. Fonte/constantes/helpers de encoding host não substituem teste MMU.
 
 Esses helpers já existem no ACK; não precisam de duplicatas Xiaomi ou stubs. Ainda precisa conectar suas semânticas aos testes de sequência do recurso, não apenas repetir chamadas modeladas.
+
+### Primeiro encadeamento com estado real dos helpers
+
+`test-dmabuf-stock-remap-pmd.py` não intercepta mais pgtable_trans_huge_deposit/pmd_set_huge: observa argumentos e executa seus corpos ARM64 stock. Host compila corpos ACK com os hashes acima, somente renomeando funções para permitir wrappers de trace. Constantes/encoding e macros list/set_pmd continuam explícitos no fixture, não extraídos magicamente. Verifica LIST_HARDENED/DEBUG_LIST/DEBUG_VM/ILLEGAL_POINTER_VALUE e BTF page.lru/ptdesc.pmd_huge_pte/ptl. Compara metadados de todas as páginas, owner/list, PMDs e barreiras. Lock modelado marca bit held usado pela guarda do corpo real; BSS/counters continuam contexto privado.
+
+Mesmos 216 inputs passam. Após cada remap sem BUG, teste continua **sem reset dos metadados** para withdraw de cada tabela depositada: 173 tabelas distintas retiradas, incluindo 16 sequências após remap retornar -ENOMEM com depósitos parciais. Corpo withdraw stock executado contra ACK C; retornos/lista/poisons/owner comparados, owner termina NULL, nenhum retorno duplicado. PMDs e pgtables_bytes permanecem iguais: withdraw sozinho **não** limpa mappings, libera tabela ou decrementa accounting. Essas ações ainda precisam ser encadeadas com zap/split/move; não chamar esta sequência de teardown completo ou prova de ausência de leaks. Lock held para withdraw é injetado no contexto privado, não adquirido por caller real.
+
+Fixture PTE passa a consumir builder hash-verificado dos helpers para manter fonte compartilhada consistente; seus 360 casos e cobertura CONT permanecem iguais. Nenhum helper PMD é usado pela rota PTE testada. Dependência local: fontes em outputs/stock-ack-dmabuf-helpers-reference-20261005 relativas ao diretório do Image; falta/hash incorreto aborta, não usa fallback.
+
+Regressão DMA completa deste checkpoint passou com os mesmos limites explícitos (split 200 default); rerun PMD/PTE após garantir alinhamento do metadata host e sizeof/page.lru também passou. Sem alterar recipes/produção, workflow, config ou device.
 
 ### Callers: inventário dedicado e primeiro hook executado
 
