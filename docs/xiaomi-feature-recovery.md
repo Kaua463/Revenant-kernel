@@ -12,7 +12,7 @@ Ferramenta `scripts/recover-stock-features.py`: somente lê entradas; preserva b
 
 |Família|Símbolos candidatos|Referências BL|Estado|
 |---|---|---|---|
-|DMA-BUF huge pages|14|68|8 funções recuperadas/testadas em emulação: wrappers, split, lock/zap e range; remap/move, ownership e integração incompletos|
+|DMA-BUF huge pages|14|68|9 corpos recuperados/testados em emulação: wrappers, split, lock/zap, range e remap; move, helpers, ownership e integração incompletos|
 |XRING LB|63|340|Interface ioctl parcialmente recuperada; handlers ainda não reimplementados|
 |F2FS fastdiscard|5|1|Inclui atributos; caminhos genéricos ainda precisam ser rastreados|
 |SCSI fastdiscard|0|0|CONFIG stock ativa; falta rastrear alterações nas funções genéricas|
@@ -107,7 +107,22 @@ Teste intercepta `mm_find_pmd`, `find_vma` e split para registrar rotas/argument
 
 `test-dmabuf-stock-range.py`: 500 casos, PGDs ausentes/table, PMD none/table/present/PROT_NONE/present-invalid, bordas 2 MiB/1 GiB, argumentos e parada no fim; 25 guards BUG disparados e comparados. Outros 24 prefixos ARM64 do remap confirmam seleção map_type=0, flags preservadas/comuns e vm_pgoff em COW; param-se antes de alocar/percorrrer PGD e não provam corpo remap inteiro. Split helper interceptado; prova routing, não mutações internas nem estabilidade de tabelas. Callers precisam garantir VMA não vazia/estável e bit 39 correto.
 
-Fontes de interface em `outputs/stock-ack-mm-reference-20261005`, `stock-ack-mm-interfaces-20261005`, `stock-ack-pgalloc-reference-20261005`, `stock-ack-tlb-reference-20261005`: commit ACK exato e cada payload Git blob/SHA256 verificado. Recurso inteiro continua incompleto: remap, move e hooks/callers/lifetime por recuperar. Nada integrado ou instalável.
+### Corpo remap, ambos os ramos
+
+`dmabuf_huge_remap.recovered.c` reconstrói o corpo inteiro de `dmabuf_huge_remap_pfn_range`: prefixo COW, vma_start_write via vm_flags_set, percursos PGD/PMD e seleção `map_type==0` para PMD ou qualquer outro valor para PTE. Ramo PMD aloca/deposita tabela e incrementa pgtables_bytes; PTE usa pte_alloc_map_lock, exige primeira PTE vazia, monta PTE special sem CONT, set_ptes e unlock/unmap. Contadores incrementam por trecho PMD, não por página individual. Sem normalização silenciosa dos valores map_type.
+
+Falha de alocação retorna -ENOMEM mantendo flags/vm_pgoff e mapeamentos anteriores; não existe unwind neste corpo. End de tamanho zero/wrap e addr não alinhado a 4KiB levam a BUG. COW precisa cobrir VMA inteira, senão -EINVAL. Guardas de adequação a **2MiB** não estão no corpo: `pmd_set_huge` recebe PA mascarado a 4KiB e retorno é ignorado. Ainda precisa validar caller para alinhamento/extent, não tratar esse código como API segura para buffers arbitrários.
+
+|Teste remap|Casos|Cobertura concreta|
+|---|---:|---|
+|PMD|216|Flags/seq/VMA/pgoff, PGD/PMD bytes, página depositada, contador e helpers; 33 sucessos multitrecho, 16 falhas parciais, 4 rejects COW, 45 BUGs|
+|PTE|360|Flags/seq, buffers PGD/PMD/PTE, máscaras SPECIAL/CONT, contadores e helper/barrier order; 60 sucessos multitrecho, 36 falhas parciais, 7 rejects COW, 87 BUGs, 70 casos PTE única e 96 bulk|
+
+Casos de falha variam independentemente do tamanho; asserts exigem cada categoria acima não vazia. BTF valida protótipo, anonymous fields, vm_lock_seq/mm_lock_seq, vm_lock, vm_pgoff, pgd/pgtables_bytes e ptdesc.ptl. Config verificada: ARM64 4KiB, VA39, três níveis e NUMA=n. `pte_alloc_one`, `pmd_set_huge`, bulk contpte_set_ptes, alloc/map-lock/RCU são modelados, não recuperados como parte desses testes. PTE única executa stores/barreiras originais. Portanto estes testes não provam helpers, MMU, races, unwind/lifetime ou implementação em outra configuração.
+
+Fixtures: ptlock do PMD fica em offset40 da struct page/ptdesc; fixture novo inicialmente copiou endereço da página adjacente usado pelo teste split, diferença de 64 bytes detectada e corrigida. BTF e trace agora conferem página certa. Teste PTE precisou mapear system_cpucaps BSS em contexto privado; não são bytes extraídos. V39/V40 já cobrem esses gates, nenhuma mudança de contrato de produção.
+
+Fontes de interface em `outputs/stock-ack-mm-reference-20261005`, `stock-ack-mm-interfaces-20261005`, `stock-ack-pgalloc-reference-20261005`, `stock-ack-tlb-reference-20261005`, `stock-ack-remap-reference-20261005`: commit ACK exato e cada payload Git blob/SHA256 verificado. Recurso inteiro continua incompleto: move, helpers, hooks/callers/lifetime por recuperar. Nada integrado ou instalável.
 
 ## Verificação executada
 
