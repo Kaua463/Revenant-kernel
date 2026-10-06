@@ -47,7 +47,7 @@ _Static_assert(sizeof(struct page)==64 && offsetof(struct page,lru)==8,"fixture 
 typedef struct page *pgtable_t;
 struct mm_struct { uint64_t count;unsigned seq;pgd_t pgd; };
 struct file {void *f_mapping;};
-struct vm_area_struct { unsigned long vm_start,vm_end,vm_flags,vm_pgoff;unsigned seq;struct mm_struct *vm_mm;struct file *vm_file;void *anon_vma; };
+struct vm_area_struct { unsigned long vm_start,vm_end,vm_flags,vm_pgoff;unsigned seq;struct mm_struct *vm_mm;struct file *vm_file;void *anon_vma;pgprot_t vm_page_prot; };
 static struct mm_struct mm;static pmd_t pmds[512],newpmds[512];static struct page page_objects[8];
 static unsigned char (*pages)[64]=(void *)page_objects;static _Alignas(8) unsigned char pmd_metadata[64],new_metadata[64];
 static uint64_t rows[128][5],counter,other;static unsigned nr,allocs,fail,bug;static jmp_buf trap;
@@ -134,7 +134,7 @@ static void host_metadata(unsigned char *metadata){
 }
 static void host_metadata_pair(unsigned char *metadata){host_metadata(metadata);memcpy(metadata+576,new_metadata,64);uint64_t owner;memcpy(&owner,metadata+592,8);if(owner)owner=0xfffffffe00050000ULL+owner-(uintptr_t)page_objects;memcpy(metadata+592,&owner,8);}
 unsigned host_remap(const uint64_t *in,uint64_t *out,uint64_t *trace_out,unsigned char *metadata) {
- struct vm_area_struct v={in[0],in[1],in[2],0xaabb,(unsigned)in[3],&mm,NULL,NULL};
+ struct vm_area_struct v={in[0],in[1],in[2],0xaabb,(unsigned)in[3],&mm,NULL,NULL,{0}};
  mm.seq=7;mm.count=in[4];mm.pgd.val=in[5];counter=in[6];other=0;fail=in[7];nr=allocs=bug=0;
  memset(pmds,0,sizeof(pmds));memset(newpmds,0,sizeof(newpmds));memset(page_objects,0xa5,sizeof(page_objects));memset(pmd_metadata,0xa5,64);memset(pmd_metadata+16,0,8);memset(pmd_metadata+40,0,4);memset(new_metadata,0xa5,64);memset(new_metadata+16,0,8);memset(new_metadata+40,0,4);
  for(unsigned i=0;i<8;i++){uint64_t flags=0;memcpy(pages[i],&flags,8);}
@@ -168,7 +168,7 @@ ZAP_WRAPPER=r'''
 void host_zap_reset(void){zap_counter=0;}
 unsigned host_zap_step(unsigned index,uint64_t address,unsigned first,uint64_t *out,uint64_t *trace_out,unsigned char *metadata,unsigned char *tlb_bytes){
  static struct mmu_gather t;if(first){memset(&t,0,sizeof(t));t.mm=&mm;t.start=UINT64_MAX;}nr=0;
- struct vm_area_struct v={0,0,0,0,0,&mm,NULL,NULL};int ret=zap_dmabuf_huge_pmd(&t,&v,indexed_pmd(index),address);
+ struct vm_area_struct v={0,0,0,0,0,&mm,NULL,NULL,{0}};int ret=zap_dmabuf_huge_pmd(&t,&v,indexed_pmd(index),address);
  out[0]=ret;out[1]=mm.count;out[2]=zap_counter;memcpy(out+3,pmds,sizeof(pmds));memcpy(out+515,newpmds,sizeof(newpmds));host_metadata_pair(metadata);
  memcpy(tlb_bytes,&t,128);uint64_t m=0x1001000;memcpy(tlb_bytes,&m,8);
  memcpy(trace_out,rows,nr*5*sizeof(uint64_t));return nr;
@@ -192,9 +192,46 @@ static void flush_tlb_range(struct vm_area_struct *v,uint64_t start,uint64_t end
 '''
 MOVE_WRAPPER=r'''
 unsigned host_move_step(unsigned old_index,unsigned new_index,uint64_t old_address,uint64_t new_address,uint64_t *out,uint64_t *trace_out,unsigned char *metadata){
- assert(old_index<512&&new_index<1024);nr=0;bug=0;struct vm_area_struct v={0,0,0,0,0,&mm,NULL,NULL};bool ret=false;
+ assert(old_index<512&&new_index<1024);nr=0;bug=0;struct vm_area_struct v={0,0,0,0,0,&mm,NULL,NULL,{0}};bool ret=false;
  if(!setjmp(trap))ret=move_dmabuf_huge_pmd(&v,old_address,new_address,indexed_pmd(old_index),indexed_pmd(new_index),false);
  out[0]=ret;out[1]=mm.count;out[2]=bug;memcpy(out+3,pmds,sizeof(pmds));memcpy(out+515,newpmds,sizeof(newpmds));host_metadata_pair(metadata);
+ memcpy(trace_out,rows,nr*5*sizeof(uint64_t));return nr;
+}
+'''
+
+SPLIT_FIXTURE=r'''
+struct folio {unsigned unused;};
+struct mmu_notifier_range {struct mm_struct *mm;uint64_t start,end;unsigned flags,event;void *owner;};
+static pte_t table_ptes[8][512];static uint64_t split_counter;
+#define dmabuf_hugetlb_pmd_split split_counter
+#define HPAGE_PMD_MASK (~(HPAGE_PMD_SIZE-1))
+#define PAGE_SIZE 4096
+#define MMU_NOTIFY_CLEAR 1
+static void mmu_notifier_range_init_owner(struct mmu_notifier_range *r,unsigned e,unsigned f,struct mm_struct *m,uint64_t a,uint64_t b,void *o){*r=(struct mmu_notifier_range){m,a,b,f,e,o};}
+static void mmu_notifier_invalidate_range_start(struct mmu_notifier_range *r){assert(r->mm==&mm && !r->owner);}
+static void mmu_notifier_invalidate_range_end(struct mmu_notifier_range *r){assert(r->mm==&mm && !r->owner);}
+/* NULL folio in chain: no folio lookup allowed. Separate split test covers guard. */
+static void *pmd_page(pmd_t p){(void)p;assert(0);return NULL;}
+static struct folio *page_folio(void *p){return p;}
+static pmd_t pmdp_invalidate(struct vm_area_struct *v,uint64_t a,pmd_t *p){assert(v->vm_mm==&mm);trace(15,0x1000000,a,pmd_address(p),0);pmd_t old=*p;p->val&=~1ULL;return old;}
+static bool pmd_dirty(pmd_t p){return !!(p.val&(1ULL<<55)) || (p.val&0x8000000000080ULL)==0x8000000000000ULL;}
+static bool pmd_write(pmd_t p){return !!(p.val&(1ULL<<51));}
+static bool pmd_young(pmd_t p){return !!(p.val&1024);}
+static void pmd_populate(struct mm_struct *m,pmd_t *p,pgtable_t t){assert(m==&mm);unsigned i=((unsigned char *)t-pages[0])/64;assert(i<8);p->val=0x800000000000003ULL+0x1400000ULL+i*4096;trace(10,0xd5033a9f,0,0,0);trace(10,0xd5033fdf,0,0,0);}
+static pte_t pte_mkwrite_novma(pte_t p){p.val=(p.val|(1ULL<<51))&~128ULL;return p;}
+static pte_t pte_mkold(pte_t p){p.val&=~1024ULL;return p;}
+static pte_t pte_mkdirty(pte_t p){p.val|=1ULL<<55;if(p.val&(1ULL<<51))p.val&=~128ULL;return p;}
+static pte_t pte_mkspecial(pte_t p){p.val|=1ULL<<56;return p;}
+static pte_t *pte_offset_kernel(pmd_t *p,uint64_t a){unsigned i=((p->val&0x7ffffff000ULL)-0x1400000)>>12;assert(i<8);return &table_ptes[i][(a>>12)&511];}
+static void set_pte_at(struct mm_struct *m,uint64_t a,pte_t *p,pte_t v){assert(m==&mm);(void)a;v.val&=~(1ULL<<52);*p=v;if((v.val&0x40000000000041ULL)==0x40000000000001ULL){trace(10,0xd5033a9f,0,0,0);trace(10,0xd5033fdf,0,0,0);}}
+static void smp_wmb(void){trace(10,0xd5033abf,0,0,0);}
+'''
+SPLIT_WRAPPER=r'''
+void host_split_reset(void){split_counter=0;memset(table_ptes,0,sizeof(table_ptes));}
+unsigned host_split_step(unsigned index,uint64_t address,uint64_t prot,uint64_t *out,uint64_t *trace_out,unsigned char *metadata,unsigned char *ptes_out){
+ nr=bug=0;struct vm_area_struct v={0,0,0,0,0,&mm,NULL,NULL,{prot}};
+ if(!setjmp(trap))__split_dmabuf_huge_pmd(&v,indexed_pmd(index),address,false,NULL);
+ out[0]=mm.count;out[1]=split_counter;out[2]=bug;memcpy(out+3,pmds,sizeof(pmds));memcpy(out+515,newpmds,sizeof(newpmds));host_metadata_pair(metadata);memcpy(ptes_out,table_ptes,sizeof(table_ptes));
  memcpy(trace_out,rows,nr*5*sizeof(uint64_t));return nr;
 }
 '''
@@ -237,12 +274,20 @@ def run(args):
     assert cleared&0xffffff==261 and cleared>>24==1
     func=next(t for t in btf.types if t['kind']==12 and t['name']=='__mod_lruvec_page_state');proto=btf.types[func['size']];delta=btf.types[proto['raw'][5]]
     assert delta['kind']==1 and delta['name']=='int' and delta['size']==4
-    for name,required in {'vm_area_struct':{'vm_file':128,'anon_vma':104},'mm_struct':{'context':0x3c8,'notifier_subscriptions':0x420}}.items():
+    for name,required in {'vm_area_struct':{'vm_file':128,'anon_vma':104,'vm_page_prot':24},'mm_struct':{'context':0x3c8,'notifier_subscriptions':0x420},'mmu_notifier_range':{'mm':0,'start':8,'end':16,'flags':24,'event':28,'owner':32}}.items():
         ident=next(i for i,t in enumerate(btf.types) if t['kind']==4 and t['name']==name);found=fields(btf,ident)
         for member,offset in required.items():assert found[member]==offset
+    func=next(t for t in btf.types if t['kind']==12 and t['name']=='__split_dmabuf_huge_pmd');proto=btf.types[func['size']]
+    assert proto['size']==0 and len(proto['raw'])==10
+    for i,name in enumerate(('vm_area_struct','pmd_t','unsigned long','bool','folio')):
+        typ=btf.types[proto['raw'][i*2+1]]
+        if i in (0,1,4):assert typ['kind']==2;typ=btf.types[typ['size']]
+        assert typ['name']==name
+    enum=next(t for t in btf.types if t['kind']==6 and t['name']=='mmu_notifier_event');assert {btf.string(enum['raw'][i]):enum['raw'][i+1] for i in range(0,len(enum['raw']),2)}['MMU_NOTIFY_CLEAR']==1
     fixture=real_helper_fixture(args.image,kernel)
     recovered=Path(__file__).parents[1]/'tools/stock-recovery'
-    code=fixture+(recovered/'dmabuf_huge_remap.recovered.c').read_text()+ZAP_FIXTURE+(recovered/'dmabuf_huge_zap.recovered.c').read_text()+MOVE_FIXTURE+(recovered/'dmabuf_huge_move.recovered.c').read_text()+WRAPPER+ZAP_WRAPPER+MOVE_WRAPPER
+    fixture=fixture.replace('rows[128][5]','rows[1600][5]').replace('nr<128','nr<1600')
+    code=fixture+(recovered/'dmabuf_huge_remap.recovered.c').read_text()+ZAP_FIXTURE+(recovered/'dmabuf_huge_zap.recovered.c').read_text()+MOVE_FIXTURE+(recovered/'dmabuf_huge_move.recovered.c').read_text()+SPLIT_FIXTURE+(recovered/'dmabuf_huge_split.recovered.c').read_text()+WRAPPER+ZAP_WRAPPER+MOVE_WRAPPER+SPLIT_WRAPPER
     with tempfile.TemporaryDirectory(prefix='dmabuf-remap-') as tmp:
         lib=Path(tmp)/'remap.dylib'
         subprocess.run(['clang','-x','c','-std=c11','-Wall','-Wextra','-Werror','-dynamiclib','-o',str(lib),'-'],input=code,text=True,check=True)
@@ -250,12 +295,14 @@ def run(args):
         host.host_withdraw.argtypes=[ctypes.c_uint,ctypes.c_void_p];host.host_withdraw.restype=ctypes.c_uint64
         host.host_zap_reset.argtypes=[];host.host_zap_step.argtypes=[ctypes.c_uint,ctypes.c_uint64,ctypes.c_uint]+[ctypes.c_void_p]*4;host.host_zap_step.restype=ctypes.c_uint
         host.host_move_step.argtypes=[ctypes.c_uint]*2+[ctypes.c_uint64]*2+[ctypes.c_void_p]*3;host.host_move_step.restype=ctypes.c_uint
+        host.host_split_reset.argtypes=[];host.host_split_step.argtypes=[ctypes.c_uint]+[ctypes.c_uint64]*2+[ctypes.c_void_p]*4;host.host_split_step.restype=ctypes.c_uint
         uc=Uc(UC_ARCH_ARM64,UC_MODE_ARM);uc.mem_map(kernel.base,(len(image)+4095)&~4095);uc.mem_write(kernel.base,image)
         ram=0x1000000;uc.mem_map(ram,0x20000)
         vma,mm,pgd,task,lock,stack,stop=[ram+x for x in (0,0x1000,0x2000,0x4000,0x6000,0xf000,0x10000)]
         direct=0xffffff8001000000;uc.mem_map(direct,8192)
         pages=0xfffffffe00050000;uc.mem_map(pages,4096)
         pmd_metadata=0xfffffffe00040000;uc.mem_map(pmd_metadata,4096)
+        pte_tables=0xffffff8001400000;uc.mem_map(pte_tables,32768)
         cap=kernel.address('system_cpucaps');assert kernel.span('system_cpucaps') is None and kernel.symbols['system_cpucaps'][0][1]=='B';uc.mem_map(cap&~4095,4096)
         counter=kernel.address('dmabuf_hugetlb_pmd_map');assert kernel.span('dmabuf_hugetlb_pmd_map') is None
         uc.mem_map(counter&~4095,4096);uc.mem_write(kernel.address('memstart_addr'),bytes(8))
@@ -263,10 +310,11 @@ def run(args):
         funcs={kernel.address(n):i+1 for i,n in enumerate(names)};trace=[];state={}
         funcs[kernel.address('__free_pages')]=11;funcs[kernel.address('pgtable_trans_huge_withdraw')]=12
         funcs[kernel.address('__sync_icache_dcache')]=13
+        funcs[kernel.address('pmdp_invalidate')]=15
         def hook(emu,address,size,user):
             if address in funcs:
                 op=funcs[address];x=[emu.reg_read(r) for r in (UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3)]
-                trace.append((op,*[x[i]&0xffffffff if op==5 and i==2 else x[i] if i<({1:1,2:1,3:3,4:4,5:3,6:1,7:3,8:3,9:1,11:2,12:2,13:1}[op]) else 0 for i in range(4)]))
+                trace.append((op,*[x[i]&0xffffffff if op==5 and i==2 else x[i] if i<({1:1,2:1,3:3,4:4,5:3,6:1,7:3,8:3,9:1,11:2,12:2,13:1,15:3}[op]) else 0 for i in range(4)]))
                 result=0
                 if op in (7,8,12):return # Observe calls, execute original stock helpers.
                 if op==3:
@@ -280,10 +328,12 @@ def run(args):
                 elif op==11:
                     assert pages<=x[0]<pages+512 and (x[0]-pages)%64==0 and x[1]==0
                     assert x[0] not in state['freed'],'double free in chain';state['freed'].add(x[0])
+                elif op==15:
+                    result=struct.unpack('<Q',emu.mem_read(x[2],8))[0];emu.mem_write(x[2],struct.pack('<Q',result&~1))
                 emu.reg_write(UC_ARM64_REG_X0,result);emu.reg_write(UC_ARM64_REG_PC,emu.reg_read(UC_ARM64_REG_X30))
             elif kernel.base<=address<kernel.base+len(image):
                 word=struct.unpack_from('<I',image,address-kernel.base)[0]
-                if word in (0xd5033a9f,0xd5033fdf,0xd5033b9f):trace.append((10,word,0,0,0))
+                if word in (0xd5033a9f,0xd5033fdf,0xd5033b9f,0xd5033abf):trace.append((10,word,0,0,0))
                 elif word&~31==0xd5088340:
                     reg=word&31;value=emu.reg_read(UC_ARM64_REG_X0+reg) if reg<31 else 0
                     trace.append((14,word&~31,value,0,0));emu.reg_write(UC_ARM64_REG_PC,address+4)
@@ -307,7 +357,7 @@ def run(args):
             allocated={pages+i*64 for i in range(mapped)}
             assert old|new==allocated-removed,('lost/extra deposited table',old,new,allocated,removed)
             return old,new
-        cases=withdrawals=partial_chains=repeated_zaps=moves=0;coverage={'multi_success':0,'partial_failure':0,'cow_reject':0,'bug':0}
+        cases=withdrawals=partial_chains=repeated_zaps=moves=splits=repeated_splits=0;coverage={'multi_success':0,'partial_failure':0,'cow_reject':0,'bug':0}
         for case in range(216):
             address=(1<<21)+(4096 if case%9==0 else 0)
             size=(1,4096,1<<21,(1<<21)+4096,3<<21,0)[case%6]
@@ -349,10 +399,10 @@ def run(args):
             if not out[7]:
                 seen=set();index=(address>>21)&511
                 check_pool(mapped,set())
-                if args.teardown in ('zap','move-zap','cross-move-zap'):
+                if args.teardown in ('zap','move-zap','cross-move-zap','split','cross-move-split'):
                     moved_index=index
-                    if args.teardown in ('move-zap','cross-move-zap'):
-                        moved_index=640 if args.teardown=='cross-move-zap' else 128;uc.mem_write(mm+0x3c8,bytes(8));uc.mem_write(mm+0x420,bytes(8));uc.mem_write(cap,bytes(16))
+                    if args.teardown in ('move-zap','cross-move-zap','cross-move-split'):
+                        moved_index=128 if args.teardown=='move-zap' else 640;uc.mem_write(mm+0x3c8,bytes(8));uc.mem_write(mm+0x420,bytes(8));uc.mem_write(cap,bytes(16))
                         for step in range(mapped):
                             old_addr=address+step*(1<<21);new_addr=(moved_index+step)*(1<<21)
                             move_out=(ctypes.c_uint64*1027)();move_rows=(ctypes.c_uint64*640)();move_meta=(ctypes.c_ubyte*640)()
@@ -373,8 +423,33 @@ def run(args):
                                 assert struct.unpack('<Q',uc.mem_read(pmd_metadata+80,8))[0]!=0,('destination deposit owner',case,step)
                                 if step==mapped-1:assert struct.unpack('<Q',uc.mem_read(pmd_metadata+16,8))[0]==0,('source deposit drained by move',case)
                             old_pool,new_pool=check_pool(mapped,set())
-                            if args.teardown=='cross-move-zap':assert len(old_pool)==mapped-step-1 and len(new_pool)==step+1,('per-owner transfer count',case,step)
+                            if args.teardown in ('cross-move-zap','cross-move-split'):assert len(old_pool)==mapped-step-1 and len(new_pool)==step+1,('per-owner transfer count',case,step)
                             moves+=1
+                    if args.teardown in ('split','cross-move-split'):
+                        host.host_split_reset();split_count=kernel.address('dmabuf_hugetlb_pmd_split');assert kernel.span('dmabuf_hugetlb_pmd_split') is None;uc.mem_write(split_count,bytes(8));uc.mem_write(pte_tables,bytes(32768));uc.mem_write(mm+0x420,bytes(8));uc.mem_write(vma+24,struct.pack('<Q',values[11]));uc.mem_write(cap,bytes(16));converted=set()
+                        for step in range(mapped+bool(mapped)):
+                            at=moved_index+min(step,mapped-1);addr=at*(1<<21);split_out=(ctypes.c_uint64*1027)();split_rows=(ctypes.c_uint64*(1600*5))();split_meta=(ctypes.c_ubyte*640)();split_ptes=(ctypes.c_ubyte*32768)()
+                            ns=host.host_split_step(at,addr,values[11],split_out,split_rows,split_meta,split_ptes);want=[tuple(split_rows[j*5:(j+1)*5]) for j in range(ns)]
+                            trace.clear()
+                            for r,v in zip((UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3,UC_ARM64_REG_X4),(vma,direct+at*8,addr,0,0)):uc.reg_write(r,v)
+                            uc.reg_write(UC_ARM64_REG_X30,stop);uc.reg_write(UC_ARM64_REG_SP,stack);uc.emu_start(kernel.address('__split_dmabuf_huge_pmd'),stop,count=100000)
+                            assert not state['bug'] and uc.reg_read(UC_ARM64_REG_PC)==stop
+                            actual=[struct.unpack('<Q',uc.mem_read(a,8))[0] for a in (mm+128,split_count)]+[state['bug']]
+                            assert actual==list(split_out[:3]) and actual[0]==out[4] and actual[1]==min(step+1,mapped),('split accounting/counter',case,step)
+                            assert bytes(uc.mem_read(direct,8192))==bytes(split_out)[24:],('chain split PMDs',case,step)
+                            assert bytes(uc.mem_read(pages,512))+bytes(uc.mem_read(pmd_metadata,128))==bytes(split_meta),('chain split metadata',case,step)
+                            assert bytes(uc.mem_read(pte_tables,32768))==bytes(split_ptes),('chain split PTEs',case,step)
+                            assert trace==want,('chain split trace',case,step,trace[:12],want[:12],len(trace),len(want))
+                            entry=struct.unpack('<Q',uc.mem_read(direct+at*8,8))[0];assert entry&3==3;slot=((entry&0x7ffffff000)-0x1400000)>>12;assert 0<=slot<8
+                            page=pages+slot*64
+                            if step<mapped:assert page not in converted;converted.add(page)
+                            else:assert page in converted
+                            check_pool(mapped,converted)
+                            ptes=struct.unpack('<512Q',uc.mem_read(pte_tables+slot*4096,4096));assert all(p&(1<<56) and not p&(1<<52) for p in ptes)
+                            assert all((ptes[i]&0xfffffffff000)==(ptes[0]&0xfffffffff000)+i*4096 for i in range(512)),('PTE physical progression',case,step)
+                            splits+=step<mapped;repeated_splits+=step==mapped
+                        assert len(converted)==mapped and not state['freed'],'split converts tables, does not free them';check_pool(mapped,converted)
+                        partial_chains+=bool(mapped and out[0]==0xfffffff4);cases+=1;continue
                     tlb=ram+0x7000;zap_count=kernel.address('dmabuf_hugetlb_pmd_zap');assert kernel.span('dmabuf_hugetlb_pmd_zap') is None
                     uc.mem_write(zap_count,bytes(8));host.host_zap_reset();gather=bytearray(128);struct.pack_into('<Q',gather,0,mm);struct.pack_into('<Q',gather,16,(1<<64)-1);uc.mem_write(tlb,bytes(gather))
                     for step in range(mapped+bool(mapped)):
@@ -418,15 +493,17 @@ def run(args):
         assert all(coverage.values()),coverage
         print(f'PASS: {cases} exact ARM64 remap PMD cases; flags, accounting, PGD/PMD writes, allocation failures, partial mappings and BUG guards')
         print(f'Coverage categories: {coverage}')
-        assert withdrawals and partial_chains
-        print(f'PASS: remap→{args.teardown} sequence: {withdrawals} tables, including {partial_chains} partial-failure chains; owner drains to NULL')
+        assert (withdrawals or splits) and partial_chains
+        print(f'PASS: remap→{args.teardown} sequence: {withdrawals or splits} tables, including {partial_chains} partial-failure chains; owner drains to NULL')
         if args.teardown in ('zap','move-zap','cross-move-zap'):
             assert repeated_zaps
             print(f'Deposited tables freed exactly once in allocator model; {repeated_zaps} repeated zap calls return zero without freeing/accounting again. PMDs clear and pgtables_bytes restores initial value; gather/counters/metadata/helper traces compared at each step.')
         if args.teardown in ('move-zap','cross-move-zap'):
             assert moves==withdrawals;print(f'PASS: {moves} remap→{args.teardown} steps; source clears, destination mapping then tears down; owner/list checked on both PMD pages')
+        if args.teardown in ('split','cross-move-split'):
+            assert repeated_splits;print(f'PASS: {splits} split tables produce {splits*512} PTEs; deposit→published-table ownership, accounting preserved, no modeled free; moves={moves}, repeated split guards={repeated_splits}')
         print('Real stock deposit/pmd_set_huge/withdraw bodies executed; native exact ACK bodies, list/owner bytes and barriers compared. Allocation/free/locks modeled; not full remap/move/split lifecycle, MMU, SMP or hardware proof.')
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--symbols',type=Path,required=True);p.add_argument('--teardown',choices=('withdraw','zap','move-zap','cross-move-zap'),default='withdraw');run(p.parse_args())
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--symbols',type=Path,required=True);p.add_argument('--teardown',choices=('withdraw','zap','move-zap','cross-move-zap','split','cross-move-split'),default='withdraw');run(p.parse_args())

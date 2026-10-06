@@ -174,9 +174,19 @@ Regressão após move-zap: suíte DMA completa, modos withdraw/zap/move-zap, hel
 
 Além do diferencial, checks independentes percorrem ambas as listas circulares: next/prev recíprocos, range/alinhamento dos nodes, ciclos válidos e nenhum node duplicado. União das listas precisa ser exatamente o conjunto de tabelas alocadas menos retiradas/liberadas, e interseção vazia. Depois de cada move cross, old contém N-step-1, new contém step+1. Source owner drena após último move; zap no destino esvazia ambos, limpa todos os PMDs e restaura accounting. Inclui 16 cadeias de remap parcial e 123 zaps repetidos sem free extra. Lock/free seguem modelos privados, sem prova de exclusão real/allocator/MMU/SMP.
 
-Modos anteriores mantidos e passaram com esses novos checks. Segundo buffer existe só no fixture: não instala PGD/VMA para destino real, não prova mremap caller, novo alocador ou hardware. PTE fixture mantém somente sua rota anterior. Próximos gaps: split encadeado, callers/lifetime/consumidor real, integração/Kbuild/KMI/SMP/hardware.
+Modos anteriores mantidos e passaram com esses novos checks. Segundo buffer existe só no fixture: não instala PGD/VMA para destino real, não prova mremap caller, novo alocador ou hardware. PTE fixture mantém somente sua rota anterior. Split encadeado limitado coberto abaixo; permanecem PTE teardown, callers/lifetime/consumidor real, integração/Kbuild/KMI/SMP/hardware.
 
 Regressão deste checkpoint: quatro modos de remap/teardown, todos os demais diferenciais DMA, helpers ACK separados e BTF passaram (split default 200). Fonte/config/hashes/BTF gates preservados. Sem alterações de produção/workflow/config/flash.
+
+### Encadeamento remap → [cross move] → split
+
+Modos `--teardown split` e `--teardown cross-move-split`: tabela retirada do pool real gerado pelo remap (e transferido por move, no segundo modo), sem substituir por tabela independente. Corpo __split_dmabuf_huge_pmd stock executa stores e barreiras; withdraw ACK/ARM64 reais. Host compila reconstrução split existente, recebe mesma identidade page/pgtable e codifica buffers PTE privados para oito páginas. Em cada modo 173 tabelas convertem-se em 88.576 PTEs, incluindo 16 cadeias de falha parcial prévia; cross-move-split inclui 173 movimentos entre owners antes da divisão. Comparados dois buffers PMD, todos os PTEs, dois descriptors/listas, accounting, contador split, argumentos/helpers/barreiras após cada etapa. Checks independentes exigem SPECIAL, ausência CONT, progressão PA em 4KiB, PMD table apontando tabela retirada única e conservação dos pools menos tabelas convertidas.
+
+123 tentativas split repetidas em PMD já table não retiram tabela extra nem incrementam contador; mantém PTEs/accounting/owner. A tabela convertida não é liberada: pgtables_bytes permanece no valor pós-remap, pois a página agora é tabela PTE publicada. `__free_pages` não pode ser chamado neste caminho; assert exige nenhum free modelado. Pools acabam vazios, mas tabelas publicadas continuam vivas — **não** declarar teardown completo ou ausência de leak antes de validar remoção PTE e free de page tables.
+
+BTF adicional valida protótipo split, vm_page_prot, mmu_notifier_range e MMU_NOTIFY_CLEAR. Perfil privado sem notifier/MTE/rmap, folio NULL; guarda folio só no teste isolado. pmdp_invalidate é modelado (retorna old e limpa VALID); seu flush TLB não executado aqui. Encoding pmd_populate/PA/VA, alocação/free/locks e callbacks continuam fixtures, não MMU real. Buffers PTE zerados privados correspondem somente ao contexto de teste; não são dump extraído. Não testa callback VMA, uso real pelo GPU ou acesso hardware. Nenhuma integração/flash.
+
+Regressão deste checkpoint: seis modos de encadeamento, PTE-remap e demais diferenciais DMA, helpers ACK separados e BTF passaram; split isolado default 200. Recipes/produção/config/workflow/device preservados. Remoção das PTEs publicadas e liberação final das page tables ainda pendentes.
 
 ### Callers: inventário dedicado e primeiro hook executado
 

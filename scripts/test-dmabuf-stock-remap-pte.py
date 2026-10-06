@@ -45,7 +45,7 @@ static void pte_unmap_unlock(pte_t *p,spinlock_t *l){(void)p;spin_unlock(l);trac
 
 WRAPPER=r'''
 unsigned host_remap(const uint64_t *in,uint64_t *out,uint64_t *trace_out) {
- struct vm_area_struct v={in[0],in[1],in[2],0xaabb,(unsigned)in[3],&mm,NULL,NULL};
+ struct vm_area_struct v={in[0],in[1],in[2],0xaabb,(unsigned)in[3],&mm,NULL,NULL,{0}};
  mm.seq=7;mm.count=in[4];mm.pgd.val=in[5];counter=0;other=in[6];fail=in[7];nr=maps=allocs=bug=0;
  memset(pmds,0,sizeof(pmds));memset(ptes,0,sizeof(ptes));
  if(in[13])for(unsigned i=0;i<8;i++)pmds[i].val=(0x2000000ULL+i*4096)|3;
