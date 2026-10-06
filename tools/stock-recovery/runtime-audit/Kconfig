@@ -1,0 +1,9 @@
+# Disposable VM audit only. Do not source this in a shipping tree.
+config XIAOMI_DMABUF_RUNTIME_AUDIT
+	bool "Disposable VM producer for recovered DMA mapper"
+	depends on XIAOMI_DMABUF_HUGETLB && ARM64_4K_PAGES && ARM64_VA_BITS_39
+	default n
+	help
+	  Creates two root-only test devices mapping only their own zeroed RAM.
+	  Built-in only. No arbitrary PFN interface. Not for phone installation.
+	  Runtime MMU/SMP and unwind validation remains mandatory.

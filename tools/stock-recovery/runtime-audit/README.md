@@ -1,4 +1,4 @@
-# Disposable DMA runtime audit — preparation, not implemented runtime proof
+# Disposable DMA runtime audit — source, not runtime proof
 
 `audit-map-contract.h` is a **new test-producer preflight**, not Xiaomi code,
 not a shipping hook and not wired into any kernel build. It deliberately limits
@@ -43,6 +43,27 @@ tested as a full runtime sequence**. An in-kernel mmap caller without that
 reference must not be assumed safe. A real GPU producer may have a different
 ownership contract and remains unverified.
 
-The runtime driver, guest MMU/SMP workload, fault injection and full unwind
-verification are still pending. Host preflight success grants no installation
-or shipping approval.
+`recovered-dma-audit.c` now implements the separate test producer source. Two
+0600 misc devices require CAP_SYS_ADMIN to open: `recovered-dma-audit-pmd` uses
+map_type=0; `recovered-dma-audit-pte` uses map_type=1. Each open owns a fresh,
+zeroed, contiguous 4 MiB order-10 allocation, released by the last file release.
+High-order allocation can legitimately fail; no fallback to arbitrary memory.
+Mappings may cover aligned 2 or 4 MiB subsets, shared and non-executable only.
+The mmap callback validates overflow/bounds, checks every actual destination
+PMD under mmap write lock, and rejects even preallocated PTE tables. It invokes
+the recovered mapper unchanged. It keeps vm_file and adds no VMA callbacks or
+extra VMA references. No ioctl/read/write/physical-address interface exists.
+
+Kconfig/Makefile are **not sourced by any kernel tree or workflow**. Their
+built-in, default-off option is for a future disposable ARM64 VM build only;
+the C guards also reject module, wrong geometry or missing recovered feature.
+No shipping overlay/config has changed. Separate compile/integration and guest
+MMU/SMP workload, fault injection and full unwind verification are still pending.
+
+```sh
+python3 scripts/test-dmabuf-runtime-producer-source.py
+```
+
+This is a source-policy check with negative mutations, **not compilation or
+semantic verification**. Host checks grant no installation/shipping approval;
+the new producer does not establish the original Xiaomi GPU activation route.

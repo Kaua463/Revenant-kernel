@@ -326,6 +326,38 @@ Novo `tools/stock-recovery/runtime-audit/audit-map-contract.h`: preflight **novo
 
 Inspeção do mmap.c ACK pinado revelou requisito importante de ownership: erro de mmap_file vai a unmap_and_free_file_vma, que faz **fput(file)→vm_file=NULL→unmap_region→vm_area_free**, sem vma_close naquele label. Não criar ref driver extra assumindo close automático no erro. O syscall ksys_mmap_pgoff para non-anonymous mantém fget(fd) até vm_mmap_pgoff retornar e só então fput; isso pode proteger alocação file-owned durante unwind, mas relação por source **não é teste runtime** e não se estende automaticamente a callers in-kernel/GPU. README do runtime audit registra requisitos e esse risco. Driver real, guest MMU/SMP, fault injection/unwind completo ainda por implementar/validar. Nenhum acesso ao device ou mudança de produção.
 
+### Produtor descartável: fonte implementada, runtime pendente
+
+`tools/stock-recovery/runtime-audit/recovered-dma-audit.c` implementa produtor
+**novo, não Xiaomi e não shipping**: dois misc devices 0600/CAP_SYS_ADMIN, modo
+PMD ou PTE fixo por arquivo, alocação própria zeroed order-10/4MiB, release
+somente no último file reference. Não oferece read/write/ioctl/PFN arbitrário,
+não usa MMIO e não adiciona vm_ops/ref extra que dependeria de close em erro.
+Mmap exige shared/non-executable, guarda shift/pgoff, bounds/alignment/VA/PA,
+verifica PMDs realmente vazios sob mmap write lock, rejeita PTE table já
+alocada e chama o mapper recuperado sem alteração. VM_MAYEXEC removido para
+não permitir mprotect posterior executável. Continua necessário provar syscall
+fget→partial-map unwind→last file release no guest; fonte não prova lifetime.
+
+Kconfig/Makefile opt-in bool/default n e guards built-in/ARM64/4K/VA39/3-levels
+estão separados, não sourced por qualquer kernel/workflow. Não foi compilado
+contra ACK nem executado em VM. Seis source-policy testes (mutações negativas
+de guards/interfaces/permissões/config/build scope) passaram; não são Kbuild.
+Preflight ASan/UBSan passou novamente: 30.240 combinações/82 aceitas.
+API headers públicos adicionais obtidos no ACK f7ebe251 com Git-blob/SHA gates,
+em outputs/stock-ack-dma-runtime-api-reference-20261006. Sem device/flash.
+
+Actions isolado 37406739074/head 96eaa013: **completed success**, ambos disabled
+e enabled. Artifact enabled baixado em outputs/dma-enabled-build-audit-37406739074:
+providers contém dez STT_FUNC e quatro counters size8; config SHA256 independente
+a958b05da1adae6dbf106a4ede148f7cb040fc855cca30b5255185087bd637ef confere;
+overlay-manifest byte-identical ao versionado. vmlinux SHA reportado
+e901bdf911bac8d6e0fbc55e9326bec3b5cd809aa62ed4357cacbc71b48460d3; vmlinux
+não distribuído neste artifact e esse hash não foi recalculado localmente.
+Status permanece OFFLINE_BUILD_SHAPE_ONLY. Composto root 37408379865 ainda
+in_progress, step Fetch exact ACK and root integration sources no snapshot.
+Build isolado verde não prova KMI composto, produtor real, MMU/SMP ou hardware.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.
