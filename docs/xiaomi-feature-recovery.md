@@ -276,6 +276,12 @@ Auditoria isolada Actions 37406739074, head 96eaa013b59c682058a168be65b210981094
 
 `test-dmabuf-root-integration-gates.py`: sete unit tests passaram — serialização independente/path order, duplicate/traversal, count/hash/root source drift, symlink, HEAD incorreto, dirty checkout, evidence existente, manager/API pins. Fixtures sintéticos/mocks **não comprovam execução completa do integrator**. Rerun dos seis testes do composto passou. Driver foi preparado, mas ainda precisa rodar com fontes completas/pinadas no runner e compilar; nenhum resultado composed Kbuild/KMI/runtime inferido desses testes. Auditoria isolada 37406739074 segue no mesmo handle, perfil disabled compilando e enabled na fila no último snapshot.
 
+### Auditoria real da composição de fontes em runner
+
+`.github/workflows/audit-rodin-dma-root-sources.yml` preparado para executar o driver root→DMA numa árvore ACK completa/limpa, com os três repositórios de integração pinados. Fetch de source somente, sem toolchain, Bazel ou build; não substitui auditoria de compilação. Trigger narrow branch/push separado do workflow de kernel, permissions contents:read, pipefail em todos os comandos e logs/evidence preservados mesmo em falha. Upload inclui apenas log, JSON, diff-stat e commits; nenhuma imagem, installer/release ou acesso a device. Não cancela auditoria isolada já em execução.
+
+`validate-dmabuf-root-workflow.rb` passou no Ruby/Psych local: pins, tag object/commit checks, interface do driver, steps/actions allowlist, logs, limites e ausência de comandos build/device. Três negativos rejeitam pin alterado, permissão write e ADB adicionado. Sete unit gates do driver passaram novamente. Execução real do runner ainda por confirmar; integração completa não inferida do YAML nem dos mocks.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

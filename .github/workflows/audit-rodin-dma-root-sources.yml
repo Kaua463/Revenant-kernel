@@ -1,0 +1,83 @@
+name: Audit rodin root DMA source composition (not flashable)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dyperos-3.0.304]
+    paths:
+      - .github/workflows/audit-rodin-dma-root-sources.yml
+      - scripts/integrate-dmabuf-after-root.py
+      - scripts/validate-dmabuf-susfs-overlay.py
+      - scripts/test-dmabuf-root-integration-gates.py
+      - scripts/validate-dmabuf-root-workflow.rb
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rodin-dma-root-sources-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  KMI_TAG: android15-6.6.77_r00
+  KMI_TAG_OBJECT: 79d26ca363880c3c6f7841045e46427bee6c3c3b
+  KMI_COMMIT: f7ebe251035c0d15ff90c6a0a320697932785fad
+  KSU_COMMIT: 234f6e040fcbca18b16d2398e1aa225712ec99ad
+  SUSFS_COMMIT: be7b7ef49a1e1b189c3abf00eacaa7ebdb4168c1
+  SUSFS_FIX_COMMIT: cd63f371d91fb7fc32014c75728fbb9b686d9ae9
+
+jobs:
+  sources:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate source audit gates
+        run: |
+          set -euo pipefail
+          ruby scripts/validate-dmabuf-root-workflow.rb
+          python3 scripts/test-dmabuf-root-integration-gates.py
+          python3 -m py_compile scripts/integrate-dmabuf-after-root.py \
+            scripts/validate-dmabuf-susfs-overlay.py scripts/validate-dmabuf-overlay.py
+      - name: Fetch pinned integration sources (no toolchain)
+        run: |
+          set -euo pipefail
+          mkdir ws
+          git init ws/common
+          git -C ws/common fetch --depth=1 https://android.googlesource.com/kernel/common.git \
+            "refs/tags/$KMI_TAG:refs/tags/$KMI_TAG"
+          test "$(git -C ws/common rev-parse "refs/tags/$KMI_TAG")" = "$KMI_TAG_OBJECT"
+          git -C ws/common checkout --detach "$KMI_TAG"
+          test "$(git -C ws/common rev-parse HEAD)" = "$KMI_COMMIT"
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/KernelSU-Next/KernelSU-Next.git ws/KernelSU-Next
+          git -C ws/KernelSU-Next checkout --detach "$KSU_COMMIT"
+          git clone --filter=blob:none --no-checkout --branch gki-android15-6.6 \
+            https://gitlab.com/simonpunk/susfs4ksu.git ws/susfs4ksu
+          git -C ws/susfs4ksu checkout --detach "$SUSFS_COMMIT"
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/WildKernels/kernel_patches.git ws/susfs-fixes
+          git -C ws/susfs-fixes checkout --detach "$SUSFS_FIX_COMMIT"
+      - name: Execute exact root then DMA integration
+        run: |
+          set -euo pipefail
+          mkdir -p dma-root-evidence
+          python3 scripts/integrate-dmabuf-after-root.py \
+            --source ws/common --ksu-source ws/KernelSU-Next \
+            --susfs-source ws/susfs4ksu --fix-source ws/susfs-fixes \
+            --overlay tools/stock-recovery/overlays/dma-6.6.77 \
+            --output dma-root-evidence/composition.json \
+            2>&1 | tee dma-root-integration.log
+          git -C ws/common diff --stat > dma-root-evidence/source-diff-stat.txt
+          for source in common KernelSU-Next susfs4ksu susfs-fixes; do
+            git -C "ws/$source" rev-parse HEAD > "dma-root-evidence/$source.commit"
+          done
+      - name: Preserve source evidence (not a build or installer)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dma-root-source-audit-${{ github.run_number }}
+          path: |
+            dma-root-integration.log
+            dma-root-evidence/
+          if-no-files-found: warn
