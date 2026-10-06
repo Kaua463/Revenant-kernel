@@ -264,6 +264,12 @@ Regressão após overlay: wrappers/range/zap/split/move/fork/unmap/move-caller/V
 
 Auditoria isolada Actions 37406739074, head 96eaa013b59c682058a168be65b2109810944e8a: último snapshot deste checkpoint comprova Fetch pinned ACK e Apply exact review overlay com sucesso; Compile audit kernel do perfil disabled em execução, enabled na fila. Não é resultado de compilação concluída.
 
+### Split-VMA com callbacks e referências de arquivo
+
+`test-dmabuf-stock-split-vma-hook.py` ampliado de 144 para 1.152 casos: matriz DMA/THP, seq igual/diferente, direção/ponto de divisão, falhas dup/preallocate/anon clone, arquivo presente/ausente e vm_ops ausente/vazio/com callbacks/com recusa. BTF valida offsets vm_operations_struct.open/close/may_split e file.f_count/f_mapping, além dos protótipos open(void, VMA*) e may_split(int, VMA*, unsigned long). O corpo ARM64 stock executa o incremento inline real de get_file sobre contador privado iniciado em 17; não intercepta esse incremento. C host independente compara ordem de helpers/callbacks, bounds antigos/novos, pgoff, lock_seq, retorno e contador em cada snapshot.
+
+576 chamadas may_split, 72 open; recusa -EBUSY ocorre antes de dup; dup/preallocate/anon clone failures não incrementam file count e não chamam open. Sucesso com arquivo incrementa uma vez antes de open; close não é chamado por split. Quatro boundary BUG guards mantidos; duas novas CFI guards com tag incorreta comprovam parada antes do callback correspondente. Tag errada de open ocorre depois de get_file, contador 18 no trap: **não é retorno recuperável nem prova de unwind**, e não propõe desabilitar CFI. Callback bodies, dup/free, tree/locks/anon clone e ajuste permanecem modelados; sem prova de contador concorrente, close/fput final, MMU ou lifetime. Recipe/overlay/produção inalterados.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.
