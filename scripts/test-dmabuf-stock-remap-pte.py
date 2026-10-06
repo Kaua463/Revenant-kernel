@@ -26,7 +26,19 @@ static pte_t *pte_alloc_map_lock(struct mm_struct *m,pmd_t *p,unsigned long a,sp
 }
 static void set_ptes(struct mm_struct *m,unsigned long a,pte_t *p,pte_t v,unsigned n){
  (void)m;if(n==1){*p=v;if((v.val&0x40000000000041ULL)==0x40000000000001ULL){trace(13,0xd5033a9f,0,0,0);trace(13,0xd5033fdf,0,0,0);}}
- else {trace(12,0x1001000,a,pte_address(p),v.val);trace(15,n,0,0,0);for(unsigned i=0;i<n;i++)p[i].val=v.val+(uint64_t)i*4096;}
+ else {
+  trace(12,0x1001000,a,pte_address(p),v.val);trace(15,n,0,0,0);
+  assert(v.val&(1ULL<<56));uint64_t end=a+(uint64_t)n*4096,pfn=(v.val&0xfffffffff000ULL)>>12,prot=v.val&0xffff000000000fffULL;
+  do {uint64_t next=addr_end(a,end,65536);unsigned count=(next-a)>>12;
+   uint64_t value=(pfn<<12)|prot;
+   if(!((a|next|(pfn<<12))&65535))value|=(1ULL<<52)|3;else value&=~(1ULL<<52);
+   for(unsigned i=0;i<count;i++){
+    p[i].val=value;if((value&0x40000000000041ULL)==0x40000000000001ULL){trace(13,0xd5033a9f,0,0,0);trace(13,0xd5033fdf,0,0,0);}
+    value=((value&0xfffffffff000ULL)+4096)|(value&0xffff000000000fffULL);
+   }
+   p+=count;pfn+=count;a=next;
+  }while(a!=end);
+ }
 }
 static void pte_unmap_unlock(pte_t *p,spinlock_t *l){(void)p;spin_unlock(l);trace(14,0,0,0,0);}
 '''
@@ -55,7 +67,7 @@ def run(args):
     base.verify_btf(kernel)
     marker='/* Explicitly unsupported in this PMD-only fixture, not production stubs. */'
     assert base.FIXTURE.count(marker)==1
-    fixture=base.FIXTURE.split(marker)[0]+PTE_FIXTURE
+    fixture=base.FIXTURE.split(marker)[0].replace('rows[128][5]','rows[4096][5]').replace('nr<128','nr<4096')+PTE_FIXTURE
     code=fixture+(Path(__file__).parents[1]/'tools/stock-recovery/dmabuf_huge_remap.recovered.c').read_text()+WRAPPER
     with tempfile.TemporaryDirectory(prefix='dmabuf-remap-pte-') as tmp:
         lib=Path(tmp)/'remap.dylib';subprocess.run(['clang','-x','c','-std=c11','-Wall','-Wextra','-Werror','-dynamiclib','-o',str(lib),'-'],input=code,text=True,check=True)
@@ -88,21 +100,23 @@ def run(args):
                         emu.mem_write(x[3],struct.pack('<Q',0xfffffffe00080028))
                 elif op==12:
                     trace.append((15,x[4]&0xffffffff,0,0,0))
-                    for i in range(x[4]&0xffffffff):emu.mem_write(x[2]+i*8,struct.pack('<Q',(x[3]+i*4096)&((1<<64)-1)))
+                    # Only observe the call; execute original contpte_set_ptes
+                    # instructions, including 64KiB CONT chunks and stores.
+                    return
                 emu.reg_write(UC_ARM64_REG_X0,result);emu.reg_write(UC_ARM64_REG_PC,emu.reg_read(UC_ARM64_REG_X30))
             elif kernel.base<=address<kernel.base+len(image):
                 word=struct.unpack_from('<I',image,address-kernel.base)[0]
                 if word&0xffe0001f==0xd4200000:state['bug']=1;emu.emu_stop()
                 elif word in (0xd5033a9f,0xd5033fdf):trace.append((13,word,0,0,0))
         uc.hook_add(UC_HOOK_CODE,hook)
-        coverage={'multi_success':0,'partial_failure':0,'cow_reject':0,'bug':0,'single_pte':0,'bulk_pte':0}
+        coverage={'multi_success':0,'partial_failure':0,'cow_reject':0,'bug':0,'single_pte':0,'bulk_pte':0,'cont_output':0,'noncont_output':0}
         for case in range(360):
             address=(1<<21)+(4096 if case%3 else 0);size=(1,4096,1<<21,(1<<21)+4096,3<<21,0)[case%6]
             if case%19==0:address+=1
             end=address+((size+4095)&~4095);flags=(0,32,40,1<<39)[case%4]
             values=(address,end+(4096 if case%11==0 else 0),flags,case%8,(0,(1<<64)-1)[case%2],(0,0x1000003)[case%2],(0,(1<<64)-1)[case%2],(case//6)%6,address,0x4000,size,
                     3|((case&1)<<54)|(((case>>1)&1)<<6)|(((case>>2)&1)<<52)|(((case>>3)&1)<<56),(1,2,0xffffffff)[case%3],case%2,int(case%17==0))
-            inputs=(ctypes.c_uint64*15)(*values);out=(ctypes.c_uint64*4616)();rows=(ctypes.c_uint64*640)()
+            inputs=(ctypes.c_uint64*15)(*values);out=(ctypes.c_uint64*4616)();rows=(ctypes.c_uint64*(4096*5))()
             n=host.host_remap(inputs,out,rows);expected=[tuple(rows[i*5:(i+1)*5]) for i in range(n)]
             uc.mem_write(vma,struct.pack('<5Q',values[0],values[1],mm,0,flags));uc.mem_write(vma+44,struct.pack('<I',values[3]));uc.mem_write(vma+48,struct.pack('<Q',lock));uc.mem_write(vma+120,struct.pack('<Q',0xaabb))
             for a,v in ((mm+112,pgd),(mm+128,values[4]),(pgd,values[5]),(counter,values[6])):uc.mem_write(a,struct.pack('<Q',v))
@@ -132,10 +146,15 @@ def run(args):
             coverage['bug']+=bool(out[7])
             coverage['bulk_pte']+=any(row[0]==12 for row in trace)
             coverage['single_pte']+=mapped>0 and not any(row[0]==12 for row in trace)
+            if mapped:
+                filled=[word for word in out[520:] if word]
+                assert all(word&(1<<56) for word in filled),'DMA mapping must remain SPECIAL'
+                coverage['cont_output']+=any(word&(1<<52) for word in filled)
+                coverage['noncont_output']+=any(not word&(1<<52) for word in filled)
         assert all(coverage.values()),coverage
         print('PASS: 360 exact-stock ARM64 PTE-remap cases; output bytes, special/CONT masks, first-PTE guards, partial failures, counters and trace')
         print(f'Coverage categories: {coverage}')
-        print('Bulk contiguous-PTE/allocator/locking helpers modeled; not their implementation, SMP, MMU or lifetime proof.')
+        print('Bulk contpte stock instructions executed (DMA SPECIAL branch); alloc/map-lock modeled. Not other contpte branches, SMP, MMU or lifetime proof.')
 
 
 if __name__=='__main__':

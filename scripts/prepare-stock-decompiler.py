@@ -9,6 +9,13 @@ import re
 import struct
 
 
+def pattern_for_scope(scope):
+    patterns = {'all': r'xring_lb|dmabuf_huge|iostat|fastdiscard', 'dmabuf': r'dmabuf_huge'}
+    if scope not in patterns:
+        raise ValueError('unsupported recovery scope')
+    return patterns[scope]
+
+
 def run(args):
     spec = importlib.util.spec_from_file_location('contracts', Path(__file__).with_name('verify-stock-recovered-contracts.py'))
     contracts = importlib.util.module_from_spec(spec)
@@ -23,18 +30,19 @@ def run(args):
     compare = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(compare)
     kernel = compare.Kernel(args.image, args.symbols)
-    pattern = r'xring_lb|dmabuf_huge|iostat|fastdiscard'
+    scope = getattr(args, 'scope', 'all')
+    pattern = pattern_for_scope(scope)
     seeds = {n for n in kernel.symbols if re.search(pattern, n)}
     for name in args.extra_symbol:
         if name not in kernel.symbols:
             raise ValueError('requested extra symbol missing: ' + name)
         seeds.add(name)
     # Include generic local helpers in the contiguous, non-init XRING text region.
-    xring = [a for a, k, n in kernel.entries if k in 'tT' and n.startswith('xring_lb_')
+    xring = [a for a, k, n in kernel.entries if scope == 'all' and k in 'tT' and n.startswith('xring_lb_')
              and a < kernel.address('_etext')]
-    if not xring:
+    if scope == 'all' and not xring:
         raise ValueError('XRING text functions missing')
-    first, last = min(xring), max(xring)
+    first, last = (min(xring), max(xring)) if xring else (-1, -1)
     seeds.update(n for a, k, n in kernel.entries if first <= a <= last and k in 'tT')
     callees = set()
     for name in seeds:
@@ -80,7 +88,11 @@ def run(args):
     # Preserve exact BTF names/prototypes/layouts rather than inventing function signatures.
     interesting = r'erofs.*iostat|lb_(?!env)|file_info|file_interval|file_record|record_(disk|info)|iostat'
     related = {n: v for n, v in records.items() if re.search(interesting, n)}
-    related.update({n: records[n] for n in ('struct bio', 'struct erofs_sb_info', 'struct file_operations')})
+    if scope == 'dmabuf':
+        related = {n: records[n] for n in ('struct vm_area_struct', 'struct mm_struct', 'struct page', 'struct ptdesc',
+                                          'struct file', 'struct address_space', 'struct anon_vma', 'struct mmu_gather')}
+    else:
+        related.update({n: records[n] for n in ('struct bio', 'struct erofs_sb_info', 'struct file_operations')})
     prototypes = {n: v for n, v in named.items() if n.startswith('12:') and n[3:] in seeds}
     (args.output / 'btf-contracts.json').write_text(json.dumps({'records': related, 'functions': prototypes}, indent=2) + '\n')
     # Full raw BTF table enables later import of transitive definitions without guessing.
@@ -94,4 +106,5 @@ if __name__ == '__main__':
     for key in ('image', 'symbols', 'output'):
         parser.add_argument('--' + key, type=Path, required=True)
     parser.add_argument('--extra-symbol',action='append',default=[])
+    parser.add_argument('--scope',choices=('all','dmabuf'),default='all')
     run(parser.parse_args())

@@ -109,7 +109,7 @@ Teste intercepta `mm_find_pmd`, `find_vma` e split para registrar rotas/argument
 
 ### Corpo remap, ambos os ramos
 
-`dmabuf_huge_remap.recovered.c` reconstrói o corpo inteiro de `dmabuf_huge_remap_pfn_range`: prefixo COW, vma_start_write via vm_flags_set, percursos PGD/PMD e seleção `map_type==0` para PMD ou qualquer outro valor para PTE. Ramo PMD aloca/deposita tabela e incrementa pgtables_bytes; PTE usa pte_alloc_map_lock, exige primeira PTE vazia, monta PTE special sem CONT, set_ptes e unlock/unmap. Contadores incrementam por trecho PMD, não por página individual. Sem normalização silenciosa dos valores map_type.
+`dmabuf_huge_remap.recovered.c` reconstrói o corpo inteiro de `dmabuf_huge_remap_pfn_range`: prefixo COW, vma_start_write via vm_flags_set, percursos PGD/PMD e seleção `map_type==0` para PMD ou qualquer outro valor para PTE. Ramo PMD aloca/deposita tabela e incrementa pgtables_bytes; PTE usa pte_alloc_map_lock, exige primeira PTE vazia, monta argumento PTE special sem CONT, set_ptes e unlock/unmap. **Isso não significa saída final sem CONT:** o helper bulk real pode ativar CONT em grupos alinhados de 64KiB. Contadores incrementam por trecho PMD, não por página individual. Sem normalização silenciosa dos valores map_type.
 
 Falha de alocação retorna -ENOMEM mantendo flags/vm_pgoff e mapeamentos anteriores; não existe unwind neste corpo. End de tamanho zero/wrap e addr não alinhado a 4KiB levam a BUG. COW precisa cobrir VMA inteira, senão -EINVAL. Guardas de adequação a **2MiB** não estão no corpo: `pmd_set_huge` recebe PA mascarado a 4KiB e retorno é ignorado. Ainda precisa validar caller para alinhamento/extent, não tratar esse código como API segura para buffers arbitrários.
 
@@ -118,7 +118,9 @@ Falha de alocação retorna -ENOMEM mantendo flags/vm_pgoff e mapeamentos anteri
 |PMD|216|Flags/seq/VMA/pgoff, PGD/PMD bytes, página depositada, contador e helpers; 33 sucessos multitrecho, 16 falhas parciais, 4 rejects COW, 45 BUGs|
 |PTE|360|Flags/seq, buffers PGD/PMD/PTE, máscaras SPECIAL/CONT, contadores e helper/barrier order; 60 sucessos multitrecho, 36 falhas parciais, 7 rejects COW, 87 BUGs, 70 casos PTE única e 96 bulk|
 
-Casos de falha variam independentemente do tamanho; asserts exigem cada categoria acima não vazia. BTF valida protótipo, anonymous fields, vm_lock_seq/mm_lock_seq, vm_lock, vm_pgoff, pgd/pgtables_bytes e ptdesc.ptl. Config verificada: ARM64 4KiB, VA39, três níveis e NUMA=n. `pte_alloc_one`, `pmd_set_huge`, bulk contpte_set_ptes, alloc/map-lock/RCU são modelados, não recuperados como parte desses testes. PTE única executa stores/barreiras originais. Portanto estes testes não provam helpers, MMU, races, unwind/lifetime ou implementação em outra configuração.
+Casos de falha variam independentemente do tamanho; asserts exigem cada categoria acima não vazia. BTF valida protótipo, anonymous fields, vm_lock_seq/mm_lock_seq, vm_lock, vm_pgoff, pgd/pgtables_bytes e ptdesc.ptl. Config verificada: ARM64 4KiB, VA39, três níveis e NUMA=n. `pte_alloc_one`, `pmd_set_huge`, alloc/map-lock/RCU permanecem modelados nesses testes (dois helpers têm comparação separada abaixo). PTE única e **contpte_set_ptes bulk agora executam instruções stock**, incluindo stores e barreiras. Não prova MMU, races, unwind/lifetime ou implementação em outra configuração.
+
+Melhoria do teste transitive: modelo bulk inicial apenas incrementava PFNs, ocultando o efeito CONT do helper que era interceptado. Revisão de fonte ACK/pseudocódigo identificou a lacuna; modelo corrigido para grupos de 16 PTEs/64KiB e interceptação removida (chamada só observada, corpo stock executado). Mesmos 360 casos passam, com 42 casos contendo saída CONT e 157 com saída não-CONT; toda PTE nova permanece SPECIAL. Não foi necessário alterar C remap, que já chamava set_ptes real. Demais ramos contpte não usados por esses inputs continuam fora da cobertura.
 
 Fixtures: ptlock do PMD fica em offset40 da struct page/ptdesc; fixture novo inicialmente copiou endereço da página adjacente usado pelo teste split, diferença de 64 bytes detectada e corrigida. BTF e trace agora conferem página certa. Teste PTE precisou mapear system_cpucaps BSS em contexto privado; não são bytes extraídos. V39/V40 já cobrem esses gates, nenhuma mudança de contrato de produção.
 
@@ -139,6 +141,22 @@ Modelo host reproduz algoritmo ACK exato de range TLBI (SCALE/NUM/TG, remainder 
 `test-dmabuf-stock-pmd-set.py` compila corpos ACK pmd_set_huge/pgattr_change_is_safe do mmu.c com SHA256 fixo: 3.000 casos, 1.096 accepts e 1.904 rejects, PMD e barreiras comparados. Permission changes, PFN diferente, CONT, nG→global, normal/tagged e flags não permitidas. **1.095 aceitações tinham PA não alinhado a 2MiB**: VM_BUG_ON é removido por DEBUG_VM=n, confirmado no Image. Isso demonstra ausência da guarda no helper, não validade desse endereço para MMU. Fonte/constantes/helpers de encoding host não substituem teste MMU.
 
 Esses helpers já existem no ACK; não precisam de duplicatas Xiaomi ou stubs. Ainda precisa conectar suas semânticas aos testes de sequência do recurso, não apenas repetir chamadas modeladas.
+
+### Callers: inventário dedicado e primeiro hook executado
+
+Preparação/decompilação `--scope dmabuf` gera somente dez funções DMA + onze callers/helpers pedidos, sem decompilar XRING/EROFS/outros recursos. Saída `outputs/stock-ghidra-20261005-dma-v6`, preparação `stock-decompiler-prep-20261005-dma-v6`: 21 corpos, 21 protótipos BTF, logs/status/manifest validados. Ghidra limitado a heap 1GiB e duas CPUs; processo terminou. Pseudocódigo permanece evidência não reimplementação.
+
+|Caller|Rota stock observada|Estado da prova|
+|---|---|---|
+|copy_page_range|Com bit39 após needs_copy, split source e limpa bit39 em source/destination antes de page-table copy|64 casos ARM64 com tabelas source vazias; split modelado, flags e seq/locks comparados|
+|unmap_page_range|Bit39 + huge: zap para 2MiB completos; split em trecho parcial; caso contrário continua PTE|Pseudocódigo/callsite mapeados; diferencial caller pendente|
+|move_page_tables|Bit39 + huge: tenta move para 2MiB completos; split se parcial/move falha|Pseudocódigo/callsite mapeados; diferencial caller pendente|
+|vma_expand/vma_shrink|Seleciona adjust DMA em vez de adjust THP com bit39; antes de mudar start/end|Pseudocódigo/callsite mapeados; diferencial caller pendente|
+|__split_vma|Adjust DMA com limite novo antes de mudar VMA|Pseudocódigo/callsite mapeados; diferencial caller pendente|
+
+`dmabuf_huge_hooks.recovered.c` contém somente recipe do hook fork, não arquivo a instalar/exportar. `test-dmabuf-stock-fork-hook.py`: executa copy_page_range inteiro com PFNMAP forçando needs_copy e PGDs vazios, flag39 ligado/desligado no source/dest, seqs iguais/diferentes; compara clearing de ambas VMAs e split→locks. BTF valida campos/protótipo. Não testa cópia de PTE, split real ou concorrência/lifetime.
+
+Ativação do produtor ainda não comprovada: varredura B/BL do text normal não achou caller externo de dmabuf_huge_remap_pfn_range; nenhum pointer absoluto para entry no Image. Nome literal único está em BTF, não em lookup string observado. Nas 18 versões únicas dos módulos GPU/Mali/heap/ion selecionados da ROM 6.6.77, nenhum ORR imediato simples do bit39 encontrado. Busca estreita não cobre masks combinadas, indireção ou todos setters: **não conclui que recurso nunca é usado**, nem que ativá-lo traria ganho no aparelho. Caminho de consumo/produtor real continua gate.
 
 Fontes de interface em `outputs/stock-ack-mm-reference-20261005`, `stock-ack-mm-interfaces-20261005`, `stock-ack-pgalloc-reference-20261005`, `stock-ack-tlb-reference-20261005`, `stock-ack-remap-reference-20261005`, `stock-ack-move-reference-20261005`, `stock-ack-dmabuf-helpers-reference-20261005`: commit ACK exato e cada payload Git blob/SHA256 verificado. Recurso inteiro continua incompleto: demais helpers, hooks/callers/lifetime, integração e gates por validar. Nada integrado ou instalável.
 
