@@ -3,6 +3,7 @@
 import argparse
 import ctypes
 import hashlib
+import json
 from pathlib import Path
 import struct
 import subprocess
@@ -53,10 +54,23 @@ unsigned host_split(const uint64_t *in,uint64_t *out,uint64_t *trace_out){
 
 def run(args):
     from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
-    from unicorn.arm64_const import (UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3,UC_ARM64_REG_X30,UC_ARM64_REG_SP,UC_ARM64_REG_SP_EL0,UC_ARM64_REG_PC)
+    from unicorn.arm64_const import (UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3,UC_ARM64_REG_X22,UC_ARM64_REG_X25,UC_ARM64_REG_X30,UC_ARM64_REG_SP,UC_ARM64_REG_SP_EL0,UC_ARM64_REG_PC)
     image=args.image.read_bytes();contract=load('verify-stock-recovered-contracts.py')
     assert hashlib.sha256(image).hexdigest()==contract.IMAGE_SHA and hashlib.sha256(args.symbols.read_bytes()).hexdigest()==contract.SYMBOL_SHA
     kernel=load('stock-binary-evidence.py').Kernel(args.image,args.symbols);fields=load('test-dmabuf-stock-wrappers.py').btf_fields
+    close_source=(args.close_source/'mm/internal.h').read_bytes();close_manifest=json.loads((args.close_source/'manifest.json').read_text())
+    assert hashlib.sha256(close_source).hexdigest()=='0f44c2539968565b7df46d420ef16950ae8d630d6b250b1e7fd97692e8b91d8c'
+    assert close_manifest['commit']=='f7ebe251035c0d15ff90c6a0a320697932785fad'
+    assert hashlib.sha1(b'blob '+str(len(close_source)).encode()+b'\0'+close_source).hexdigest()==close_manifest['files']['mm/internal.h']['git_blob']
+    assert b'vma->vm_ops = &vma_dummy_vm_ops;' in close_source
+    # Bounded inlined remove_vma block, NOT the whole exit_mmap. Its caller has
+    # already unmapped the VMA and established unreachability; those conditions
+    # and x22/x25 live-in registers are explicit fixture preconditions.
+    close_entry=0xffffffc08033b2b4;close_end=0xffffffc08033b2fc
+    assert kernel.address('exit_mmap')<=close_entry<close_end<kernel.address('exit_mmap')+len(kernel.span('exit_mmap'))
+    assert hashlib.sha256(image[close_entry-kernel.base:close_end-kernel.base]).hexdigest()=='67980becd27b68fd4f0ea17f5393b8876919bee3b216c69d5cb802f528041345'
+    dummy_ops=kernel.address('vma_dummy_vm_ops')
+    assert image[dummy_ops-kernel.base:dummy_ops-kernel.base+144]==bytes(144)
     for name,required in {'vm_area_struct':{'vm_start':0,'vm_end':8,'vm_mm':16,'vm_flags':32,'vm_lock_seq':44,'vm_lock':48,'vm_pgoff':120,'vm_ops':112,'vm_file':128},'mm_struct':{'mm_lock_seq':224},'ma_state':{'index':8,'last':16,'node':24},'vma_prepare':{'vma':0,'insert':40},'vm_operations_struct':{'open':0,'close':8,'may_split':16},'file':{'f_count':24,'f_mapping':232}}.items():
         ident=next(i for i,t in enumerate(kernel.btf.types) if t['kind']==4 and t['name']==name);found=fields(kernel.btf,ident)
         for member,offset in required.items():assert found[member]==offset
@@ -67,7 +81,7 @@ def run(args):
         if i<2:assert typ['kind']==2;typ=kernel.btf.types[typ['size']]
         assert typ['name']==name
     vmops_type=next(t for t in kernel.btf.types if t['kind']==4 and t['name']=='vm_operations_struct')
-    for offset,result_name,arg_names in ((0,None,('vm_area_struct',)),(16,'int',('vm_area_struct','unsigned long'))):
+    for offset,result_name,arg_names in ((0,None,('vm_area_struct',)),(8,None,('vm_area_struct',)),(16,'int',('vm_area_struct','unsigned long'))):
         member=next(vmops_type['raw'][i+1] for i in range(0,len(vmops_type['raw']),3) if vmops_type['raw'][i+2]==offset*8)
         pointer=kernel.btf.types[member];assert pointer['kind']==2
         callback=kernel.btf.types[pointer['size']];assert callback['kind']==13 and len(callback['raw'])==2*len(arg_names)
@@ -84,9 +98,9 @@ def run(args):
         ram=0x1000000;uc.mem_map(ram,0x20000);vma=ram;mm=ram+0x1000;iterator=ram+0x2000;sem=ram+0x3000;task=ram+0x4000;new=ram+0x5000;newsem=ram+0x6000;stack=ram+0xf000;stop=ram+0x10000
         vmops=ram+0x7000;file=ram+0x8000;may=ram+0x11004;opened=ram+0x12004;closed=ram+0x13004
         # Exact CFI type tags checked by this stock caller before its BLR.
-        uc.mem_write(may-4,struct.pack('<I',0xc839c7f3));uc.mem_write(opened-4,struct.pack('<I',0x6b80e497))
+        uc.mem_write(may-4,struct.pack('<I',0xc839c7f3));uc.mem_write(opened-4,struct.pack('<I',0x6b80e497));uc.mem_write(closed-4,struct.pack('<I',0x6b80e497))
         names=('vm_area_dup','mas_preallocate','anon_vma_clone','mas_destroy','vm_area_free','down_write','up_write','vma_prepare','vma_adjust_dmabuf_huge','vma_adjust_trans_huge','vma_complete','mas_find','split_pad_vma')
-        ops={kernel.address(name):i for i,name in enumerate(names)};ops.update({may:13,opened:14,closed:15});trace=[];state={};counts={i:0 for i in range(16)}
+        ops={kernel.address(name):i for i,name in enumerate(names)};ops.update({may:13,opened:14,closed:15,kernel.address('__vm_area_free'):16});trace=[];state={};counts={i:0 for i in range(18)}
         def hook(emu,address,size,user):
             if address in ops:
                 op=ops[address];x=[emu.reg_read(r) for r in (UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3)];a,b,c=x[:3];result=0
@@ -100,23 +114,27 @@ def run(args):
                 elif op==12:assert x==[vma,new,state['addr'],state['below']]
                 elif op==13:assert [a,b]==[vma,state['addr']];c=0;result=(1<<64)-16 if state['callbacks']==3 else 0
                 elif op==14:assert a==new;b=c=0
-                else:raise AssertionError('split must not call close')
+                elif op in (15,16):assert state['closing'] and a==new;b=c=0
                 bounds=struct.unpack('<2Q',emu.mem_read(vma,16))+struct.unpack('<2Q',emu.mem_read(new,16));refcount=struct.unpack('<Q',emu.mem_read(file+24,8))[0];trace.append((op,a,b,c,*bounds,refcount))
                 if op==0:
                     if state['fail']!=1:emu.mem_write(new,bytes(emu.mem_read(vma,208)));emu.mem_write(new+48,struct.pack('<Q',newsem));result=new
                 elif op==1:result=1 if state['fail']==2 else 0
                 elif op==2:result=(1<<64)-22 if state['fail']==3 else 0
                 emu.reg_write(UC_ARM64_REG_X0,result);emu.reg_write(UC_ARM64_REG_PC,emu.reg_read(UC_ARM64_REG_X30))
+            elif address==kernel.address('fput'):
+                assert state['closing'] and emu.reg_read(UC_ARM64_REG_X0)==file
+                bounds=struct.unpack('<2Q',emu.mem_read(vma,16))+struct.unpack('<2Q',emu.mem_read(new,16))
+                trace.append((17,file,0,0,*bounds,struct.unpack('<Q',emu.mem_read(file+24,8))[0]))
             elif kernel.base<=address<kernel.base+len(image):
                 word=struct.unpack_from('<I',image,address-kernel.base)[0]
                 if word&0xffe0001f==0xd4200000:state['bug']=True;emu.emu_stop()
-        uc.hook_add(UC_HOOK_CODE,hook);case=0;returned_file_refs=0
+        uc.hook_add(UC_HOOK_CODE,hook);case=0;returned_file_refs=0;closed_vmas=0
         def reset(flags,seq,addr,below,fail,has_file=0,callbacks=0):
             uc.mem_write(vma,bytes(208));uc.mem_write(vma,struct.pack('<5Q',0x400000,0x800000,mm,0,flags));uc.mem_write(vma+44,struct.pack('<I',seq));uc.mem_write(vma+48,struct.pack('<Q',sem));uc.mem_write(vma+120,struct.pack('<Q',0xabc));uc.mem_write(mm+224,struct.pack('<I',7));uc.mem_write(new,bytes(208));uc.mem_write(iterator,bytes(128));uc.mem_write(iterator+24,struct.pack('<Q',1))
             uc.mem_write(file,bytes(264));uc.mem_write(file+24,struct.pack('<Q',17));uc.mem_write(file+232,struct.pack('<Q',ram+0x9000))
             uc.mem_write(vmops,struct.pack('<3Q',opened if callbacks>=2 else 0,closed,may if callbacks>=2 else 0))
             uc.mem_write(vma+112,struct.pack('<Q',vmops if callbacks else 0));uc.mem_write(vma+128,struct.pack('<Q',file if has_file else 0))
-            trace.clear();state.update(addr=addr,below=below,fail=fail,callbacks=callbacks,bug=False)
+            trace.clear();state.update(addr=addr,below=below,fail=fail,callbacks=callbacks,closing=False,bug=False)
             for r,v in zip((UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3),(iterator,vma,addr,below)):uc.reg_write(r,v)
             uc.reg_write(UC_ARM64_REG_X30,stop);uc.reg_write(UC_ARM64_REG_SP,stack);uc.reg_write(UC_ARM64_REG_SP_EL0,task)
         for dma in (0,1):
@@ -137,17 +155,22 @@ def run(args):
                 actual.append(struct.unpack('<Q',uc.mem_read(file+24,8))[0])
                 assert actual==list(out),('state',case,actual,list(out));assert trace==expected,('order',case,trace,expected)
                 for row in trace:counts[row[0]]+=1
-                if has_file and actual[8]==0:
-                    # Same file object whose inline get_file ran in __split_vma,
-                    # not a new synthetic count. Close caller itself not modeled
-                    # as real here: invoke actual stock fput explicitly.
-                    assert actual[9]==18
+                if actual[8]==0:
+                    # Same actual duplicate and file buffers produced above.
+                    # Close/free callback bodies modeled; inlined close routing
+                    # and fput body execute, including vm_ops poisoning.
                     expected_file=bytearray(uc.mem_read(file,264));struct.pack_into('<Q',expected_file,24,17)
-                    uc.reg_write(UC_ARM64_REG_X0,file);uc.reg_write(UC_ARM64_REG_X30,stop);uc.reg_write(UC_ARM64_REG_SP,stack)
-                    uc.emu_start(kernel.address('fput'),stop,count=10000)
-                    assert uc.reg_read(UC_ARM64_REG_PC)==stop and bytes(uc.mem_read(file,264))==bytes(expected_file)
-                    assert trace==expected, 'nonlast fput must not call queued helpers/callbacks'
-                    returned_file_refs+=1
+                    before_close=len(trace);state['closing']=True
+                    uc.reg_write(UC_ARM64_REG_X22,new);uc.reg_write(UC_ARM64_REG_X25,dummy_ops);uc.reg_write(UC_ARM64_REG_SP,stack)
+                    uc.emu_start(close_entry,close_end,count=10000)
+                    assert uc.reg_read(UC_ARM64_REG_PC)==close_end and not state['bug']
+                    assert bytes(uc.mem_read(file,264))==bytes(expected_file)
+                    wanted=([15] if callbacks else [])+([17] if has_file else [])+[16]
+                    assert [row[0] for row in trace[before_close:]]==wanted
+                    expected_ops=dummy_ops if callbacks else 0
+                    assert struct.unpack('<Q',uc.mem_read(new+112,8))[0]==expected_ops
+                    for row in trace[before_close:]:counts[row[0]]+=1
+                    closed_vmas+=1;returned_file_refs+=int(has_file)
                 case+=1
         for addr in (0x3ff000,0x400000,0x800000,0x801000):
             reset(1<<39,7,addr,0,0);uc.emu_start(kernel.address('__split_vma'),stop,count=100000);assert state['bug'] and not trace
@@ -158,11 +181,17 @@ def run(args):
             assert state['bug'] and not any(row[0]==callback_op for row in trace)
             assert struct.unpack('<Q',uc.mem_read(file+24,8))[0]==expected_refs
             uc.mem_write(entry-4,struct.pack('<I',tag))
-        assert all(counts[i] for i in range(15)) and counts[15]==0,counts
-        assert returned_file_refs==108
-        print(f'PASS: {case} ARM64 split-VMA cases + 4 boundary BUG guards + 2 callback CFI guards + {returned_file_refs} same-object stock fput returns; routes={counts}; old/new bounds/pgoff/seq, cleanup and pre-update adjust')
-        print('may_split/open and inline get_file execute in stock; same-object fput restores original 17 references. Close caller not executed. Callback bodies, VMA dup/free, anon clone, tree, locks and adjust modeled. No MMU or concurrent refcount/lifetime proof.')
+        reset(1<<39,7,0x600000,0,0,1,2);uc.mem_write(new,bytes(uc.mem_read(vma,208)));state['closing']=True
+        uc.mem_write(closed-4,struct.pack('<I',0x6b80e496));uc.reg_write(UC_ARM64_REG_X22,new);uc.reg_write(UC_ARM64_REG_X25,dummy_ops)
+        uc.emu_start(close_entry,close_end,count=10000)
+        assert state['bug'] and not trace and struct.unpack('<Q',uc.mem_read(file+24,8))[0]==17
+        assert struct.unpack('<Q',uc.mem_read(new+112,8))[0]==vmops
+        uc.mem_write(closed-4,struct.pack('<I',0x6b80e497))
+        assert all(counts.values()),counts
+        assert returned_file_refs==108 and closed_vmas==216
+        print(f'PASS: {case} ARM64 split-VMA cases + 4 boundary BUG guards + 3 callback CFI guards + {closed_vmas} close blocks/{returned_file_refs} same-object stock fput returns; routes={counts}')
+        print('Bounded exit_mmap close block executes close→dummy ops→fput→free routing on actual duplicate; original 17 file holders preserved. Whole exit_mmap/unmap/unreachability and callback/free/tree/lock bodies modeled or assumed; no MMU/SMP/destructor/complete lifetime proof.')
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--symbols',type=Path,required=True);run(p.parse_args())
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--symbols',type=Path,required=True);p.add_argument('--close-source',type=Path,required=True);run(p.parse_args())
