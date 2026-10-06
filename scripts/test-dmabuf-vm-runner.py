@@ -10,7 +10,13 @@ import unittest
 from unittest.mock import patch
 
 module = SourceFileLoader('dma_vm_runner', str(Path(__file__).with_name('run-dmabuf-vm-audit.py'))).load_module()
-PASS = '\n'.join(('DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-pmd reader_passes=1',
+PASS = '\n'.join(('DMA_AUDIT_ALLOC id=1 mode=0 bytes=4194304',
+                  'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-pmd',
+                  'DMA_AUDIT_RELEASE id=1 mode=0',
+                  'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-pmd reader_passes=1',
+                  'DMA_AUDIT_ALLOC id=2 mode=1 bytes=4194304',
+                  'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-pte',
+                  'DMA_AUDIT_RELEASE id=2 mode=1',
                   'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-pte reader_passes=1',
                   'DMA_GUEST_PASS: basic tests', 'DMA_VM_RESULT_PASS: finished'))
 
@@ -69,6 +75,28 @@ class Runner(unittest.TestCase):
         for name in module.REQUIRED:
             with self.subTest(name=name), self.assertRaises(ValueError):
                 module.check_config(config.replace('CONFIG_' + name + '=y', 'CONFIG_' + name + '=m'))
+
+    def test_final_release_rejects_incomplete_or_wrong_lifetime(self):
+        mutations = (
+            PASS.replace('DMA_AUDIT_RELEASE id=1 mode=0\n', ''),
+            PASS + '\nDMA_AUDIT_RELEASE id=1 mode=0\n',
+            PASS.replace('RELEASE id=1', 'RELEASE id=3'),
+            PASS.replace('ALLOC id=2', 'ALLOC id=1'),
+            PASS.replace('ALLOC id=1 mode=0', 'ALLOC id=1 mode=1'),
+            PASS.replace('bytes=4194304', 'bytes=4096', 1),
+            PASS.replace('DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-pmd\nDMA_AUDIT_RELEASE id=1 mode=0',
+                         'DMA_AUDIT_RELEASE id=1 mode=0\nDMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-pmd'),
+            PASS.replace('DMA_AUDIT_RELEASE id=1 mode=0\nDMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-pmd reader_passes=1',
+                         'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-pmd reader_passes=1\nDMA_AUDIT_RELEASE id=1 mode=0'),
+        )
+        for index, text in enumerate(mutations):
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                module.check_log(text)
+
+    def test_kernel_timestamp_prefix_and_crlf(self):
+        prefixed = '\n'.join('[    1.000] ' + line if line.startswith('DMA_AUDIT_') else line
+                             for line in PASS.splitlines())
+        module.check_log(prefixed.replace('\n', '\r\n'))
 
     def test_ram_only_command(self):
         args = SimpleNamespace(kernel=Path('/tmp/audit/Image'), initramfs=Path('/tmp/audit/initramfs.cpio'))

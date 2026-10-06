@@ -65,8 +65,19 @@ symlinks, existing destination/evidence and repeated application fail closed.
 The separate `audit-rodin-dma-producer.yml` compiles built-in on exact ACK,
 requires config plus producer objects in vmlinux, and uploads evidence only.
 It shares the existing audit concurrency group and never cancels a live audit.
-Compile results and guest MMU/SMP workload, fault injection and full unwind
-verification are still pending. The workflow does not boot or publish a VM image.
+Run 37428061875 compiled and executed the basic ARM64 QEMU guest workload
+successfully; composed KSU/SUSFS compile/ABI run 37429423148 also passed.
+The workflow boots a RAM-only disposable VM but does not publish a VM image.
+Fault injection, complete unwind, stock producer activation and hardware remain
+unproven. These tests are not installation/shipping approval.
+
+The audit producer now logs unique allocation IDs and a final release event
+after both real backing/storage frees return, without reading freed storage.
+The guest marks immediately before its final alias unmap; the runner requires
+one matching release per mode between that marker and case completion. Missing,
+duplicate, wrong-ID, malformed or out-of-order events fail closed. This is
+instrumentation only in the disposable producer; no new userspace control or
+shipping overlay change. A fresh VM run is required to prove this new gate.
 
 ```sh
 python3 scripts/test-dmabuf-runtime-producer-source.py

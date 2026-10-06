@@ -186,6 +186,7 @@ static void exercise(const char *device)
 	atomic_store_explicit(&reader.stop, 1, memory_order_release);
 	if (pthread_join(thread, NULL))
 		fail("reader join");
+	printf("DMA_GUEST_LAST_UNMAP: %s\n", device);
 	if (munmap(alias, BYTES))
 		fail("last mapping teardown");
 	printf("DMA_GUEST_CASE_PASS: %s reader_passes=%lu\n", device,

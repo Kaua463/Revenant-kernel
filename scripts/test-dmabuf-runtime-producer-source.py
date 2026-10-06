@@ -19,6 +19,11 @@ def validate(source, config, makefile):
         'page_to_pfn(buffer->pages) + (offset >> PAGE_SHIFT)',
         'return dmabuf_huge_remap_pfn_range(',
         'misc_deregister(&audit_pmd_device)',
+        'atomic64_inc_return(&audit_next_id)',
+        'unsigned long long id = buffer->id;',
+        'unsigned int map_type = buffer->map_type;',
+        'DMA_AUDIT_ALLOC id=%llu mode=%u bytes=%lu',
+        'DMA_AUDIT_RELEASE id=%llu mode=%u',
     )
     for token in required:
         if token not in source:
@@ -30,6 +35,11 @@ def validate(source, config, makefile):
             raise ValueError('forbidden audit interface: ' + token)
     if source.count('.mode = 0600') != 2:
         raise ValueError('both devices must be root-only')
+    release = source.split('static int audit_release(', 1)[1].split('static bool audit_empty_destination', 1)[0]
+    if not release.index('__free_pages(') < release.index('kfree(buffer);') < release.index('pr_info('):
+        raise ValueError('release event must follow both real frees')
+    if 'buffer->' in release.split('kfree(buffer);', 1)[1]:
+        raise ValueError('use of buffer after free')
     if 'default n' not in config or '\tbool ' not in config or 'tristate' in config:
         raise ValueError('audit must default off and be built-in')
     if makefile.splitlines()[-1] != 'obj-$(CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT) += recovered-dma-audit.o':
@@ -73,6 +83,13 @@ class SourcePolicy(unittest.TestCase):
     def test_makefile_scope(self):
         with self.assertRaises(ValueError):
             validate(self.source, self.config, self.makefile + '\nobj-m += dump.o\n')
+
+    def test_release_instrumentation_order_and_no_freed_dereference(self):
+        event = 'pr_info("DMA_AUDIT_RELEASE id=%llu mode=%u\\n", id, map_type);'
+        for source in (self.source.replace('kfree(buffer);\n\t/* Log after', event + '\n\tkfree(buffer);\n\t/* Log after'),
+                       self.source.replace(event, event + '\n\tbuffer->map_type = 0;')):
+            with self.assertRaises(ValueError):
+                validate(source, self.config, self.makefile)
 
 
 if __name__ == '__main__':

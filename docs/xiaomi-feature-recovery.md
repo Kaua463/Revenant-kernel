@@ -499,6 +499,32 @@ Backprop §B proposta: double escaping/identical aliases → parser tested stock
 V28 já exige release exato; SPEC não editado sem aprovação. Nova auditoria
 composta necessária; nenhuma alteração da fonte kernel/SCM para esconder erro.
 
+### Checkpoint — VM básica executada; final backing-free instrumentado, pendente
+
+Run 37428061875/head598545816599ada708c2bedb99acb01971266154:
+completed success confirmado no Actions e serial real em
+outputs/dma-producer-vm-37428061875/dma-evidence/vm/serial.log.
+PMD reader_passes=11, PTE=9; quatro markers de conclusão; sem BUG/WARNING/
+Oops/panic. ARM64 QEMU 4 CPUs, RAM-only, sem rede/discos/shares.
+Image SHA59166ae44ce6cc8bc006b909569a19bc010f71ac8dc22a4ad8fdab34b4691738;
+initramfs SHA87cdacac4326b8f79383cb32c8c74e4515a2bfdf2de913a70ee592067c37d5bc.
+Prova mmap/fork/move/split/alias/reader no workload básico; não prova ENOMEM,
+final backing-free, produtor Xiaomi ou hardware completo.
+
+Run composto 37429423148/headc96c1a5e76ef1855e4932b0bcd497302f85401a7:
+completed success; logs de providers/610module entries/3506CRCs/78signed modules/
+certificado/23settings/release-banner gate aprovados. Compile/ABI apenas,
+não runtime KSU/SUSFS, não instalador/hardware.
+
+Próximo gate: produtor audit-only atribui ID por allocation bem-sucedida e
+registra RELEASE **após** __free_pages e kfree, sem ler storage liberado.
+Guest marca imediatamente antes do último munmap. Runner exige dois IDs únicos,
+um por mode, release único correspondente após LAST_UNMAP e antes CASE_PASS;
+eventos ausentes/duplicados/malformados/antecipados/tardios falham fechado.
+Fonte/pin/testes alterados; novo runtime ainda pendente. Mocks do parser não
+contam como VM execution. Nenhuma mudança do overlay instalável/ABI/interfaces;
+nenhum flash/celular. T20 permanece incompleta.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

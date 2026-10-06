@@ -12,7 +12,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 validator = SourceFileLoader('runtime_dma_validator', str(ROOT / 'scripts/validate-dmabuf-overlay.py')).load_module()
 PINS = {
-    'recovered-dma-audit.c': 'ebec7ead2776d2e66c2562a3b5504a0f1a0da1e5f38f1156f4b45c57e121b28c',
+    'recovered-dma-audit.c': '92f7a0430a2e9127091df1714f85f8713edcf992e41c6026fb1a3a78531eefd0',
     'audit-map-contract.h': '3bcb3044740336508a49ea37b4af205a52c0510cf9bc0ff3cd6f751709d0388c',
     'Kconfig': '54d2576b1c42ce6f301eb5de7934ddc74aabef1cc63a848f089e94ed2c28bf72',
     'Makefile': 'c23c0dcc8bdc4122064f57355a5f5e8525374fc83ba74bd6ae05e97e65a51ecf',

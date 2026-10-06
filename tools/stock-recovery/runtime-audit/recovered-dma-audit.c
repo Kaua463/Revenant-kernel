@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* NEW disposable-VM producer. Not Xiaomi code; never a phone module. */
+#include <linux/atomic.h>
 #include <linux/capability.h>
 #include <linux/fs.h>
 #include <linux/init.h>
@@ -8,6 +9,7 @@
 #include <linux/mmap_lock.h>
 #include <linux/module.h>
 #include <linux/pgtable.h>
+#include <linux/printk.h>
 #include <linux/slab.h>
 #include <linux/xiaomi_dmabuf_huge.h>
 
@@ -28,8 +30,10 @@
 struct audit_buffer {
 	struct page *pages;
 	unsigned int map_type;
+	unsigned long long id;
 };
 
+static atomic64_t audit_next_id = ATOMIC64_INIT(0);
 static struct miscdevice audit_pmd_device;
 static struct miscdevice audit_pte_device;
 
@@ -52,17 +56,24 @@ static int audit_open(struct inode *inode, struct file *file)
 		return -ENOMEM;
 	}
 	buffer->map_type = device == &audit_pte_device;
+	buffer->id = (unsigned long long)atomic64_inc_return(&audit_next_id);
 	file->private_data = buffer;
+	pr_info("DMA_AUDIT_ALLOC id=%llu mode=%u bytes=%lu\n",
+		buffer->id, buffer->map_type, AUDIT_BYTES);
 	return 0;
 }
 
 static int audit_release(struct inode *inode, struct file *file)
 {
 	struct audit_buffer *buffer = file->private_data;
+	unsigned long long id = buffer->id;
+	unsigned int map_type = buffer->map_type;
 
 	/* File-owned, not VMA-callback-owned. Last fput only, after mappings go. */
 	__free_pages(buffer->pages, AUDIT_ORDER);
 	kfree(buffer);
+	/* Log after both real frees return; never dereference freed storage. */
+	pr_info("DMA_AUDIT_RELEASE id=%llu mode=%u\n", id, map_type);
 	return 0;
 }
 

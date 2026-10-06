@@ -26,6 +26,25 @@ def check_log(text):
             raise ValueError('missing/duplicate guest completion: ' + marker)
     if re.search(r'DMA_(?:GUEST_FAIL|VM_RESULT_FAIL)|BUG:|WARNING:|Oops:|Kernel panic|Call trace:', text):
         raise ValueError('guest/kernel failure reported')
+    allocations = list(re.finditer(r'DMA_AUDIT_ALLOC id=([1-9][0-9]*) mode=([01]) bytes=4194304\r?\n', text))
+    releases = list(re.finditer(r'DMA_AUDIT_RELEASE id=([1-9][0-9]*) mode=([01])\r?\n', text))
+    if (len(allocations) != 2 or len(releases) != 2 or
+            text.count('DMA_AUDIT_ALLOC') != 2 or text.count('DMA_AUDIT_RELEASE') != 2):
+        raise ValueError('missing/duplicate/malformed allocation or final release')
+    if len({match.group(1) for match in allocations}) != 2:
+        raise ValueError('allocation IDs must be unique')
+    for mode, device in enumerate(('pmd', 'pte')):
+        allocated = [match for match in allocations if match.group(2) == str(mode)]
+        released = [match for match in releases if match.group(2) == str(mode)]
+        boundary = 'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-' + device
+        completed = 'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-' + device
+        if len(allocated) != 1 or len(released) != 1 or text.count(boundary) != 1:
+            raise ValueError('missing/duplicate mode lifetime: ' + device)
+        allocation, release = allocated[0], released[0]
+        if allocation.group(1) != release.group(1):
+            raise ValueError('release does not match allocated buffer: ' + device)
+        if not allocation.start() < text.index(boundary) < release.start() < text.index(completed):
+            raise ValueError('release outside last-unmap interval: ' + device)
 
 
 def command(args):
@@ -69,7 +88,8 @@ def run(args):
         'failure': reason, 'command': cmd,
         'kernel_sha256': hashlib.sha256(image).hexdigest(),
         'initramfs_sha256': hashlib.sha256(initramfs).hexdigest(),
-        'pending': ['fault-injected partial ENOMEM unwind', 'final backing-free verification',
+        'verified': ['basic guest workload', 'two file-owned buffers freed exactly once after final unmap'] if reason is None else [],
+        'pending': ['fault-injected partial ENOMEM unwind',
                     'stock GPU producer activation', 'hardware/complete lifetime'],
     }
     (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
