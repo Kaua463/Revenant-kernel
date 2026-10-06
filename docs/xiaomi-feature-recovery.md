@@ -234,6 +234,12 @@ Teste adicional `test-dmabuf-stock-table-rcu.py`: 16 sequências queue/flush/cal
 
 Regressão: seis modos de encadeamento anteriores, PTE-remap 360, wrappers/range/zap/split/move e todos os callers, deposit 7.200 passos, pmd_set_huge 3.000 e três BTF unit tests passaram. Split isolado default 200. Modos novos passaram com e sem retirada de tabelas. Nenhuma recipe, config/workflow, produção ou device alterado; integração/RCU/SMP/Kbuild/KMI/hardware continuam pendentes.
 
+### Preparação da integração DMA — base e limites de hooks
+
+Workflow audit-rodin-6.6.77-ksun-susfs.yml reconferido: KMI_TAG android15-6.6.77_r00, tag object 79d26ca363880c3c6f7841045e46427bee6c3c3b, commit f7ebe251035c0d15ff90c6a0a320697932785fad. SPEC mantém descrições antigas 6.6.102; não foi reescrito nem usado como evidência do alvo atual. `outputs/stock-ack-dmabuf-overlay-reference-20261005` contém 11 arquivos necessários (MM mmap/mremap/memory/huge_memory, Kconfig/Makefile, headers MM/pgtable), cada Git blob/SHA256 verificado no pin. Fetcher permite explicitamente somente mm/Kconfig e mm/Makefile além dos C/headers já aceitos; três testes preservam rejeição de outros build files, traversal/normalização/paths absolutos.
+
+**Não substituir globalmente todas as chamadas vma_adjust_trans_huge.** ACK mmap.c possui cinco sites: expand, shrink, vma_merge, split-VMA e do_brk_flags. Stock `vma_merge` span inferido 1.852 bytes possui BL em 0xffffffc0803370d8 para **vma_adjust_trans_huge**, não para DMA; copy_vma chama vma_merge. Site do merge passa adj_start potencialmente não zero, ao contrário dos três callers DMA já verificados. Overlay deve preservar esse caminho genérico e aplicar seleção DMA somente nos sites comprovados no stock; do_brk_flags ainda precisa cotejo binário antes de qualquer decisão. Fonte ACK isolada não autoriza inventar hook. Nenhuma integração aplicada neste checkpoint.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

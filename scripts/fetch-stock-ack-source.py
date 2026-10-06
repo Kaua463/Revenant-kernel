@@ -7,6 +7,9 @@ import re
 
 
 def validate_path(value):
+    # Explicit build-integration inputs for the pinned DMA MM overlay.
+    if value in ('mm/Kconfig','mm/Makefile'):
+        return value
     path=PurePosixPath(value)
     if (path.is_absolute() or '..' in path.parts or path.as_posix()!=value or
         not re.fullmatch(r'(mm|include|arch|fs)/[A-Za-z0-9_./-]+\.(c|h)',value)):
