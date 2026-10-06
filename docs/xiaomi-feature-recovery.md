@@ -12,7 +12,7 @@ Ferramenta `scripts/recover-stock-features.py`: somente lê entradas; preserva b
 
 |Família|Símbolos candidatos|Referências BL|Estado|
 |---|---|---|---|
-|DMA-BUF huge pages|14|68|3 wrappers + split PMD recuperados/testados em emulação; ownership/locks/map/unmap ainda incompletos|
+|DMA-BUF huge pages|14|68|8 funções recuperadas/testadas em emulação: wrappers, split, lock/zap e range; remap/move, ownership e integração incompletos|
 |XRING LB|63|340|Interface ioctl parcialmente recuperada; handlers ainda não reimplementados|
 |F2FS fastdiscard|5|1|Inclui atributos; caminhos genéricos ainda precisam ser rastreados|
 |SCSI fastdiscard|0|0|CONFIG stock ativa; falta rastrear alterações nas funções genéricas|
@@ -97,7 +97,17 @@ Teste intercepta `mm_find_pmd`, `find_vma` e split para registrar rotas/argument
 
 `test-dmabuf-stock-split.py`: 1.000 casos confirmados, comparando todos os 4.096 bytes da tabela, PMD, contador (incl. wrap), guardas folio/compound head, chamadas e sequência dsb/isb/dmb. Inclui PMD present/PROT_NONE/present-invalid/table/zero e flags WRITE/AF/dirty/CONT. Protótipo/enum/layouts conferidos no BTF. Helpers MM/TLB/lock modelados; execução usa instruções reais para stores/atomics/barreiras, **não** prova efeito delas na MMU/cache/coerência. BSS dos contadores/system_cpucaps explicitamente modelado, não fingido como bytes extraídos. ARM64 alternatives do Image permanecem sem patches de boot; validar variante efetiva do aparelho ainda pendente.
 
-Fontes de interface em `outputs/stock-ack-mm-reference-20261005`, `stock-ack-mm-interfaces-20261005`, `stock-ack-pgalloc-reference-20261005`: commit ACK exato e cada payload Git blob/SHA256 verificado. Recurso inteiro continua incompleto: remap, range walker, move/zap, lock e hooks/callers/lifetime por recuperar.
+### Lock, remoção e percurso do intervalo
+
+`dmabuf_huge_zap.recovered.c` recupera `__pmd_dmabuf_huge_lock` e `zap_dmabuf_huge_pmd`. Lock usa ptlock da página do PMD, não acessa VMA; reread sob lock rejeita PMD não huge. Zap limpa PMD atomicamente, estende start/end de mmu_gather e marca cleared_pmds, retira/libera tabela PTE depositada, reduz pgtables_bytes em 4096, unlock e incrementa contador. Não libera as páginas do buffer DMA-BUF. Reimplementação limitada ao split PMD ptlock do stock; gate dessa configuração obrigatório antes de integração.
+
+`test-dmabuf-stock-zap.py`: 1.000 casos lock/zap contra ARM64, comparando retorno, PMD, 128 bytes de gather, metadados da página liberada, contadores e ordem/argumentos dos helpers. Inclui PageHead/order/nr_pages, flags gather preservadas, intervalos/range wrap e contadores u64. Helpers free/lock são modelos; não prova liberação real, TLB/SMP ou lifetime. Falha inicial do fixture: delta `int` negativo comparado como u64 sign-extended; ARM64 escreve W2. BTF confirma int32; normalização explícita ao comparar corrige fixture, não código recuperado. V39 já exige assinatura real; nenhuma alteração de contrato proposta.
+
+`dmabuf_huge_range.recovered.c` recupera `__split_dmabuf_huge_range` e wrapper `split_dmabuf_huge_range`, restritos à geometria stock ARM64 4K/VA39/três níveis. Percorre PGDs de 1 GiB e PMDs de 2 MiB, chama split apenas para PMD huge. Com PGD table válido, exige **bit 39 da VMA**, senão BUG. Nome original da macro e produtor desse bit ainda não comprovados; constante marcada como recuperada, não inventada como THP. Máscara PA de descriptor `0x7ffffff000` preservada, não generalizada para outra geometria.
+
+`test-dmabuf-stock-range.py`: 500 casos, PGDs ausentes/table, PMD none/table/present/PROT_NONE/present-invalid, bordas 2 MiB/1 GiB, argumentos e parada no fim; 25 guards BUG disparados e comparados. Split helper interceptado; prova routing, não mutações internas nem estabilidade de tabelas. Callers precisam garantir VMA não vazia/estável e bit 39 correto.
+
+Fontes de interface em `outputs/stock-ack-mm-reference-20261005`, `stock-ack-mm-interfaces-20261005`, `stock-ack-pgalloc-reference-20261005`, `stock-ack-tlb-reference-20261005`: commit ACK exato e cada payload Git blob/SHA256 verificado. Recurso inteiro continua incompleto: remap, move, produtor bit39 e hooks/callers/lifetime por recuperar. Nada integrado ou instalável.
 
 ## Verificação executada
 
