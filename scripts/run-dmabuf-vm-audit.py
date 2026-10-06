@@ -42,6 +42,8 @@ def check_log(text):
         raise ValueError('missing/duplicate/malformed allocation or final release')
     if len({match.group(1) for match in allocations}) != 8:
         raise ValueError('allocation IDs must be unique')
+    if text.count('DMA_GUEST_CROSS_PGD:') != 8:
+        raise ValueError('missing/duplicate cross-PGD mapping evidence')
     faults = list(re.finditer(r'DMA_AUDIT_FAULT id=([1-9][0-9]*) mode=([01]) ordinal=([12]) published=([01]) table=([01])\r?\n', text))
     table_faults = list(re.finditer(r'DMA_AUDIT_TABLE_FAULT id=([1-9][0-9]*) mode=([01]) ordinal=(1) published=(0) table=(0) cold=1\r?\n',text))
     if len(table_faults) != 2 or text.count('DMA_AUDIT_TABLE_FAULT') != 2 or text.count('DMA_GUEST_COLD_RANGE') != 2:
@@ -72,6 +74,9 @@ def check_log(text):
         if len(allocated) != 1 or len(released) != 1 or text.count(boundary) != 1:
             raise ValueError('missing/duplicate mode lifetime: ' + device)
         release = released[0]
+        crossing = 'DMA_GUEST_CROSS_PGD: /dev/recovered-dma-audit-' + device + ' bytes=4194304 root_slots=2 data_verified=1'
+        if text.count(crossing) != 1 or not allocation.start() < text.index(crossing) < text.index(boundary):
+            raise ValueError('cross-PGD data proof missing/outside owned lifetime: '+device)
         if release.group(2) != str(mode):
             raise ValueError('release does not match allocated buffer: ' + device)
         if not allocation.start() < text.index(boundary) < release.start() < text.index(completed):
@@ -91,7 +96,7 @@ def check_log(text):
             deltas = (0,) if inject == 3 else (0,4096) if inject == 1 else (4096,8192)
             if before % 4096 or after != before or partial - before not in deltas:
                 raise ValueError('page-table accounting did not return to baseline: ' + device)
-            if not allocation.start() < fired[0].start() < returned[0].start() < unwound[0].start() < text.index(retry) < text.index(boundary):
+            if not allocation.start() < fired[0].start() < returned[0].start() < unwound[0].start() < text.index(retry) < text.index(crossing) < text.index(boundary):
                 raise ValueError('partial ENOMEM lifetime order wrong: ' + device)
             if inject == 3:
                 cold = f'DMA_GUEST_COLD_RANGE mode={mode} bytes=1073741824 aligned=1'
@@ -177,6 +182,7 @@ def run(args):
         'verified': ['basic guest workload', 'eight file-owned buffers freed exactly once after final unmap',
                      'PMD/PTE first and second leaf ENOMEM; publication checks and same-address retry',
                      'cold-PUD PMD-table ENOMEM in both modes; zero publication/accounting delta and retry',
+                     'eight owned 4MiB aliases cross two PGD slots with every data word verified',
                      'page-table accounting returns to baseline after selected partial ENOMEM',
                      'real DMA-BUF core to exporter mmap, 4K/64K/2M/4M alignment including nonaligned hints',
                      'two DMA-BUF-owned buffers survive fd close/fork/move until final unmap'] if reason is None else [],

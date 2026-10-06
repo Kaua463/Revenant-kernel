@@ -877,6 +877,28 @@ Novo runtime não executado: não reclassificar históricos4/6 casos como pass8.
 Ainda falta later-PGD allocation failure após primeira publicação, todos
 MMU/TLB/SMP/lifetime e stockGPU/root/KMI/hardware gates. T20 permanece ~.
 
+### Checkpoint — native root-boundary regression e crossing guest
+
+T20/V35/V39, sem nova recipe/canonical patch mudança. Verificado no ACK
+include/linux/pgtable.h SHA bdfc3c9f86b18719f0bec51cfb5174918a81285da4eefefe9afd3880fac164fc:
+pgd_addr_end usa PGDIR boundary, não é folded constant-end. nop4d sobrescreve
+p4d_addr_end, nopud sobrescreve pud_addr_end. Hipótese de macro PGD errado
+refutada: mapper já usa pgd_addr_end correto, nenhuma correção fictícia.
+Novo teste compila macro nativo exato + expressão real recipe, perfil explícito
+4K/VA39/3levels, spans dentro/cross1GiB/highVA e rounded-boundary wrap.
+Regressão trocando para p4d_addr_end falha; folded suite4tests pass.
+Isso prova aritmética, não MMU/PTE/PMD allocation/hardware.
+
+Guest8cases adiciona alias4M em16GiB-2M, após reservar2slots inteiros via
+PROT_NONE/NO_REPLACE e remover reserva; nenhuma thread existe nesse ponto.
+Verifica cada palavra nos dois lados e unmap antes de close(fd)/fork/readers.
+Parser exige8cross markers com bytes4M/root_slots2/data_verified1, entre
+allocation e lastunmap; nos casos fault, após accounting+retry marker.
+Negativas para missing/duplicate/wrongmode/one-slot/no-data/wrongsize/ordem.
+VM37519394415 ainda pending/jobs=[]; novo guest não executado remotamente.
+Todos gates full-DMA/stockproducer/root/KMI/hardware continuam pendentes;
+T20 permanece ~, não instalar nem alegar cross-boundary runtime pass.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

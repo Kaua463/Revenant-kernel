@@ -117,6 +117,7 @@ jobs:
           python3 scripts/test-dmabuf-audit-fault-plan.py
           python3 scripts/test-dmabuf-audit-log-formats.py
           DMA_FOLDED_ACK_SOURCE="$GITHUB_WORKSPACE/ws/common" \
+            DMA_ACK_REFERENCE="$GITHUB_WORKSPACE/runtime-reference" \
             python3 scripts/test-dmabuf-folded-levels.py
           DMA_ACK_REFERENCE="$GITHUB_WORKSPACE/runtime-reference" \
             python3 scripts/test-dmabuf-fault-sites.py

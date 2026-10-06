@@ -116,6 +116,29 @@ static void migrate_and_verify(const void *alias)
 		fail("restore affinity");
 }
 
+static void verify_cross_pgd(int fd, const char *device)
+{
+	const size_t span = 2UL << 30;
+	void *base = (void *)(uintptr_t)(15UL << 30);
+	void *hole = (void *)(uintptr_t)((16UL << 30) - BLOCK);
+	void *mapping;
+
+	/* Both PGD slots must be free; never clobber an unrelated VMA. No
+	 * worker threads exist yet, and the kernel preflight checks real tables.
+	 */
+	if (mmap(base, span, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS |
+		 MAP_FIXED_NOREPLACE, -1, 0) != base || munmap(base, span))
+		fail("cross-PGD range reservation");
+	mapping = mmap(hole, BYTES, PROT_READ | PROT_WRITE,
+		       MAP_SHARED | MAP_FIXED_NOREPLACE, fd, 0);
+	if (mapping != hole)
+		fail("cross-PGD mapping");
+	verify(mapping, 0, BYTES);
+	printf("DMA_GUEST_CROSS_PGD: %s bytes=4194304 root_slots=2 data_verified=1\n", device);
+	if (munmap(mapping, BYTES))
+		fail("cross-PGD mapping teardown");
+}
+
 static void exercise(const char *device, int inject)
 {
 	int fd = open(device, O_RDWR | O_CLOEXEC), status;
@@ -177,6 +200,7 @@ static void exercise(const char *device, int inject)
 	alias = map_owned(fd);
 	audit_fill(first, BYTES, SEED);
 	verify(alias, 0, BYTES);
+	verify_cross_pgd(fd, device);
 	if (close(fd))
 		fail("close mapped file");
 	/* No descriptor remains: VMA file references must retain backing. */

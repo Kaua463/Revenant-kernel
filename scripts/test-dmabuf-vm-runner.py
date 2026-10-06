@@ -28,7 +28,8 @@ def mock_pass():
                           f'DMA_AUDIT_FAULT_RETURN id={identity} mode={mode} result=-12 fired=1',
                           f'DMA_AUDIT_UNWIND id={identity} mode={mode} before=12288 partial={partial} retry=12288',
                           f'DMA_GUEST_ENOMEM_PASS: /dev/recovered-dma-audit-{device} same_address_retry=1'))
-        lines.extend((f'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-{device}',
+        lines.extend((f'DMA_GUEST_CROSS_PGD: /dev/recovered-dma-audit-{device} bytes=4194304 root_slots=2 data_verified=1',
+                      f'DMA_GUEST_LAST_UNMAP: /dev/recovered-dma-audit-{device}',
                       f'DMA_AUDIT_RELEASE id={identity} mode={mode}',
                       f'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-{device} reader_passes=1'))
     for mode in (0,1):
@@ -48,6 +49,25 @@ PASS = mock_pass()
 
 
 class Runner(unittest.TestCase):
+    def test_cross_pgd_data_proof_is_required_for_every_owned_buffer(self):
+        crossing = 'DMA_GUEST_CROSS_PGD: /dev/recovered-dma-audit-pmd bytes=4194304 root_slots=2 data_verified=1'
+        for replacement in ('',crossing.replace('root_slots=2','root_slots=1'),
+                            crossing.replace('data_verified=1','data_verified=0'),
+                            crossing.replace('bytes=4194304','bytes=2097152'),
+                            crossing.replace('audit-pmd','audit-pte')):
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                module.check_log(PASS.replace(crossing,replacement))
+        with self.assertRaises(ValueError):
+            module.check_log(crossing+'\n'+PASS.replace(crossing,''))
+        with self.assertRaises(ValueError):
+            module.check_log(PASS+'\n'+crossing)
+        for identity,device in ((5,'first-pmd'),(7,'table-pmd')):
+            crossing = f'DMA_GUEST_CROSS_PGD: /dev/recovered-dma-audit-{device} bytes=4194304 root_slots=2 data_verified=1'
+            allocation = f'DMA_AUDIT_ALLOC id={identity} mode=0 bytes=4194304 fault=1'
+            early = PASS.replace(crossing,'',1).replace(allocation,allocation+'\n'+crossing,1)
+            with self.subTest(device=device), self.assertRaises(ValueError):
+                module.check_log(early)
+
     def test_cold_pud_fault_requires_empty_table_zero_accounting_and_reservation(self):
         original = 'DMA_AUDIT_TABLE_FAULT id=7 mode=0 ordinal=1 published=0 table=0 cold=1'
         for before,after in (('ordinal=1','ordinal=2'),('published=0','published=1'),

@@ -59,6 +59,11 @@ with PROT_NONE/NO_REPLACE, unmaps it, then maps at 4/6 GiB respectively.
 The kernel independently requires the real PUD entry to be zero; a populated
 entry fails closed, never silently changes the test to a leaf failure.
 All eight cases run the full retry/alias/fork/move/SMP workload.
+Before creating any worker thread, each also reserves two empty 1 GiB VA slots
+with PROT_NONE/NO_REPLACE, removes that reservation, and maps a 4 MiB alias
+starting 2 MiB before the 16 GiB boundary. Every data word on both sides is
+checked, then the crossing alias is unmapped. No unrelated VMA is overwritten.
+The guest and strict serial gates are implemented, not yet VM-validated.
 High-order allocation can legitimately fail; no fallback to arbitrary memory.
 Mappings may cover aligned 2 or 4 MiB subsets, shared and non-executable only.
 The mmap callback validates overflow/bounds, checks every actual destination
@@ -145,6 +150,12 @@ Cold-PUD failure additionally requires cold=1, zero published blocks, no
 first-block mapping and exactly zero temporary page-table accounting delta.
 The corresponding VA reservation marker must precede the failure callback.
 Failure allocating a later PGD slot after partial publication is still pending.
+`test-dmabuf-folded-levels.py` additionally compiles the exact pinned native
+`pgd_addr_end` macro and the recovered next-boundary expression with an explicit
+4K/VA39/three-level profile. Cross-boundary and unsigned-wrap tests pass; using
+folded `p4d_addr_end` instead fails. The actual mapper already uses the correct
+PGD macro: no production change was made from this hypothesis. This proves
+boundary arithmetic only, not MMU/page-table writes or lifecycle.
 This deliberately injects the allocation-failure outcome at the exact call
 site, not a global allocator failure; other allocation sites/accounting and full
 hardware lifetimes still require additional gates.
