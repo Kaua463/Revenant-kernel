@@ -53,7 +53,12 @@ the same restrictions, but inject ordinal-two allocation failure on the first
 valid mmap only. The normal devices do not arm failure injection.
 `recovered-dma-audit-first-pmd`/`-first-pte` add first-leaf failure cases with
 the same capability/0600/ownership limits. They are implemented but not yet
-validated in a VM. All six cases run the full retry/alias/fork/move/SMP workload.
+validated in a VM. `recovered-dma-audit-table-pmd`/`-table-pte` add the cold-PUD
+`__pmd_alloc` failure case. The guest checks an entire 1 GiB PGD-slot VA range
+with PROT_NONE/NO_REPLACE, unmaps it, then maps at 4/6 GiB respectively.
+The kernel independently requires the real PUD entry to be zero; a populated
+entry fails closed, never silently changes the test to a leaf failure.
+All eight cases run the full retry/alias/fork/move/SMP workload.
 High-order allocation can legitimately fail; no fallback to arbitrary memory.
 Mappings may cover aligned 2 or 4 MiB subsets, shared and non-executable only.
 The mmap callback validates overflow/bounds, checks every actual destination
@@ -110,8 +115,9 @@ Partial ENOMEM audit integration (selected VM gates passed):
 `prepare-dmabuf-fault-sites.py` takes the exact hash-pinned recovered
 `mm/huge_memory.c` and emits a separate copy with three audit-config-gated failure
 sites: cold-PUD `__pmd_alloc`, deposited-table `pte_alloc_one`, and
-`pte_alloc_map_lock`. The cold-PUD callback is wired but currently dormant:
-the guest does not yet arm it. No PMD-table failure runtime coverage is claimed.
+`pte_alloc_map_lock`. The cold-PUD callback and guest arm are implemented,
+but have not yet been validated in a VM. No PMD-table failure runtime coverage
+is claimed from the host tests.
 It preserves the rest of the source and never writes input/production overlay.
 `audit-fault-plan.h` supplies a bounded, site/task/mm-scoped, one-shot ordinal selector.
 Its caller must serialize arm/check/reset; it is not a concurrent allocator or
@@ -132,9 +138,13 @@ alone cannot prove publication because stock ignores `pmd_set_huge`'s return.
 The guest checks ENOMEM, mincore ENOMEM (no VMA), same-address NOREPLACE retry
 (including the producer's no-stale-table preflight), every data word and full
 basic alias/fork/move/split/SMP workload after retry. The current gate requires
-six allocation/release IDs and four failure/retry sequences with exact ordinals,
+eight allocation/release IDs and six failure/retry sequences with exact ordinals,
 publication state and strict final-unmap ordering. Run 37494587692 passed the
 older four-buffer/ordinal-two assertions only, not the new first-leaf cases.
+Cold-PUD failure additionally requires cold=1, zero published blocks, no
+first-block mapping and exactly zero temporary page-table accounting delta.
+The corresponding VA reservation marker must precede the failure callback.
+Failure allocating a later PGD slot after partial publication is still pending.
 This deliberately injects the allocation-failure outcome at the exact call
 site, not a global allocator failure; other allocation sites/accounting and full
 hardware lifetimes still require additional gates.
@@ -170,7 +180,7 @@ include that runner-specific regression. Canonical patch/path/hash gates remain
 unchanged.
 
 `guest-init.c` is static PID1 for the RAM archive only: mounts proc/sysfs,
-creates exactly six mapper misc nodes plus the DMA-BUF exporter factory from
+creates exactly eight mapper misc nodes plus the DMA-BUF exporter factory from
 their technical sysfs dev numbers,
 executes the workload and powers off. GKI has no built-in devtmpfs here, so the
 archive includes only the standard 5:1 console node; audit nodes are discovered,
@@ -181,7 +191,7 @@ decode the archive independently and reject dynamic/wrong/truncated ELF/overwrit
 `run-dmabuf-vm-audit.py` checks built-in VM prerequisites and ARM64 Image magic,
 then runs four-CPU QEMU virt with no network, disks, monitor or host-directory
 shares, with bounded timeout. It saves serial logs on timeout/failure and
-requires all six mapper-case markers, both exporter cases, guest and PID1 completion, no panic/BUG/Oops/
+requires all eight mapper-case markers, both exporter cases, guest and PID1 completion, no panic/BUG/Oops/
 warning, plus QEMU zero exit. Runner mock tests are **not VM execution**.
 Producer workflow now includes this runtime step with ephemeral binaries/archive;
 only logs/config/reports/tool versions are uploaded, never kernel or flash files.

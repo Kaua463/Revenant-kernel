@@ -131,6 +131,22 @@ static void exercise(const char *device, int inject)
 		void *hole = reservation(BYTES);
 		void *result;
 
+		if (strstr(device, "-table-")) {
+			unsigned int mode = strstr(device, "-pte") != NULL;
+			const size_t span = 1UL << 30;
+			void *cold = (void *)(uintptr_t)((4UL + 2UL * mode) << 30);
+			/* No MAP_FIXED clobber: fail if any VMA occupies this whole
+			 * PGD slot. PROT_NONE does not fault RAM or create PMD tables.
+			 * The kernel separately requires the real PUD to be zero.
+			 */
+			if (munmap(hole, BYTES) ||
+			    mmap(cold, span, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS |
+				 MAP_FIXED_NOREPLACE, -1, 0) != cold || munmap(cold, span))
+				fail("cold PGD-slot reservation");
+			hole = cold;
+			printf("DMA_GUEST_COLD_RANGE mode=%u bytes=1073741824 aligned=1\n", mode);
+		}
+
 		errno = 0;
 		result = mmap(hole, BYTES, PROT_READ | PROT_WRITE,
 			      MAP_SHARED | MAP_FIXED, fd, 0);
@@ -339,6 +355,8 @@ int main(int argc, char **argv)
 	exercise("/dev/recovered-dma-audit-fault-pte", 1);
 	exercise("/dev/recovered-dma-audit-first-pmd", 1);
 	exercise("/dev/recovered-dma-audit-first-pte", 1);
+	exercise("/dev/recovered-dma-audit-table-pmd", 1);
+	exercise("/dev/recovered-dma-audit-table-pte", 1);
 	exercise_export(0);
 	exercise_export(1);
 	puts("DMA_GUEST_PASS: basic mmap/fork/move/split/lifetime/SMP workload only");

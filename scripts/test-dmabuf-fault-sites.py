@@ -132,7 +132,7 @@ int main(void) {
             self.assertEqual(result, module.transform(self.data))
             report = json.loads((args.output/'report.json').read_text())
             self.assertEqual(len(report['sites']), 3)
-            self.assertIn('dormant', report['coverage']['pmd_table'])
+            self.assertIn('VM not validated', report['coverage']['pmd_table'])
             self.assertIn('VM not validated', report['coverage']['leaf_ordinal_1'])
             with self.assertRaises(ValueError):
                 module.run(args)

@@ -89,9 +89,10 @@ def run(args):
         'coverage': {
             'leaf_ordinal_2': 'existing guest; current Image needs VM validation',
             'leaf_ordinal_1': 'first-pmd/first-pte guest implemented; VM not validated',
-            'pmd_table': 'callback wired but dormant; guest arm not implemented',
+            'pmd_table': 'table-pmd/table-pte cold-PUD guest implemented; VM not validated',
         },
-        'pending': ['first-leaf VM execution; cold-PUD guest arm/ENOMEM/retry assertions',
+        'pending': ['first-leaf and cold-PUD VM execution',
+                    'later PGD-slot allocation failure after partial publication',
                     'all allocation failures and complete unwind runtime'],
     }
     (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')

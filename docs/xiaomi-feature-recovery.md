@@ -855,6 +855,28 @@ misc_register: deregister reverse apenas providers previamente registrados,
 exatamente uma vez; sucesso registra todos sem deregister. Não Kbuild proof.
 PMD_TABLE callback permanece dormant; guest cold-PUD failure ainda pendente.
 
+### Checkpoint — cold-PUD guest e eight-buffer gates implementados
+
+T20/V35/V39. VM37519394415 segue pending/jobs=[] no head0ab92e4;
+audit37519394148 disabled Kbuild/providers success, enabled compilando.
+Novos table-pmd/table-pte, root0600/CAP_SYS_ADMIN, arma site PMD_TABLE1.
+Guest verifica VA slot inteiro1GiB via PROT_NONE/NO_REPLACE, unmap e usa
+4/6GiB para mmap/retry. Nenhum MAP_FIXED clobber durante reserva.
+Kernel exige PUD real vazio antes de armar; callback relê cold, publicação0,
+table0 e contabilização0delta; retry deve manter baseline exato.
+Isso injeta o resultado de falha no site exato, não prova allocator nativo.
+Guest continua mincore semVMA/retryNO_REPLACE/full-data e toda lifecycle.
+
+Parser exige oito IDs finais e seis falhas; PMD_TABLE distinta de LEAF,
+cold reservation order, cold1, zero temporary accounting; negativas cobrem
+wrongmode/ID/ordinal, publicação/table/cold falsa, leaks e markers ausentes.
+Init hostfailure matrix agora cobre oito misc_register unwind em reverso.
+Formats strictClang compila dez logs reais. Source policy cruza inventários
+produtor/guest/init, não deixa novo device sem caso/nó.
+Novo runtime não executado: não reclassificar históricos4/6 casos como pass8.
+Ainda falta later-PGD allocation failure após primeira publicação, todos
+MMU/TLB/SMP/lifetime e stockGPU/root/KMI/hardware gates. T20 permanece ~.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

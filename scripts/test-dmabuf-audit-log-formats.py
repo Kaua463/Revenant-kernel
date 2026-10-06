@@ -12,7 +12,7 @@ def compile_logs(source):
     structure = re.search(r'struct audit_buffer \{.*?\n\};', source, re.S)
     size = re.search(r'^#define AUDIT_BYTES .*$', source, re.M)
     logs = re.findall(r'\bpr_(?:info|err)\((.*?)\);', source, re.S)
-    if not structure or not size or len(logs) != 8:
+    if not structure or not size or len(logs) != 10:
         raise ValueError('unexpected audit format inventory')
     program = '''#include <stdbool.h>
 #include "audit-map-contract.h"
@@ -24,7 +24,7 @@ void check_logs(void) {
     struct dma_audit_fault_plan audit_fault_plan = {0};
     long long published = 0;
     unsigned long long audit_fault_id = 0, id = 0;
-    unsigned int map_type = 0, table_present = 0;
+    unsigned int map_type = 0, table_present = 0, cold = 0;
     unsigned long table_bytes_retry = 0;
     int result = 0;
 ''' + '\n'.join('checked_log(' + log + ');' for log in logs) + '\n}\n'

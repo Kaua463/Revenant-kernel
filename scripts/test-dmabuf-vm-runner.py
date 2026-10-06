@@ -14,11 +14,17 @@ def mock_pass():
     lines = []
     for identity, mode, device, inject in ((1, 0, 'pmd', 0), (2, 1, 'pte', 0),
                                            (3, 0, 'fault-pmd', 2), (4, 1, 'fault-pte', 2),
-                                           (5, 0, 'first-pmd', 1), (6, 1, 'first-pte', 1)):
+                                           (5, 0, 'first-pmd', 1), (6, 1, 'first-pte', 1),
+                                           (7, 0, 'table-pmd', 3), (8, 1, 'table-pte', 3)):
         lines.append(f'DMA_AUDIT_ALLOC id={identity} mode={mode} bytes=4194304 fault={int(bool(inject))}')
         if inject:
             partial = 16384 if inject == 2 else 12288
-            lines.extend((f'DMA_AUDIT_FAULT id={identity} mode={mode} ordinal={inject} published={inject-1} table={inject-1}',
+            if inject == 3:
+                lines.append(f'DMA_GUEST_COLD_RANGE mode={mode} bytes=1073741824 aligned=1')
+                fired = f'DMA_AUDIT_TABLE_FAULT id={identity} mode={mode} ordinal=1 published=0 table=0 cold=1'
+            else:
+                fired = f'DMA_AUDIT_FAULT id={identity} mode={mode} ordinal={inject} published={inject-1} table={inject-1}'
+            lines.extend((fired,
                           f'DMA_AUDIT_FAULT_RETURN id={identity} mode={mode} result=-12 fired=1',
                           f'DMA_AUDIT_UNWIND id={identity} mode={mode} before=12288 partial={partial} retry=12288',
                           f'DMA_GUEST_ENOMEM_PASS: /dev/recovered-dma-audit-{device} same_address_retry=1'))
@@ -42,6 +48,28 @@ PASS = mock_pass()
 
 
 class Runner(unittest.TestCase):
+    def test_cold_pud_fault_requires_empty_table_zero_accounting_and_reservation(self):
+        original = 'DMA_AUDIT_TABLE_FAULT id=7 mode=0 ordinal=1 published=0 table=0 cold=1'
+        for before,after in (('ordinal=1','ordinal=2'),('published=0','published=1'),
+                             ('table=0','table=1'),('cold=1','cold=0'),('id=7','id=5'),
+                             ('mode=0','mode=1')):
+            with self.subTest(before=before), self.assertRaises(ValueError):
+                module.check_log(PASS.replace(original,original.replace(before,after)))
+        accounting = 'DMA_AUDIT_UNWIND id=7 mode=0 before=12288 partial=12288 retry=12288'
+        for before,after in (('partial=12288','partial=16384'),('partial=12288','partial=8192'),
+                             ('retry=12288','retry=16384'),('id=7','id=8')):
+            with self.subTest(before=before), self.assertRaises(ValueError):
+                module.check_log(PASS.replace(accounting,accounting.replace(before,after)))
+        cold = 'DMA_GUEST_COLD_RANGE mode=0 bytes=1073741824 aligned=1'
+        for replacement in ('',cold.replace('mode=0','mode=1'),
+                            cold.replace('aligned=1','aligned=0'),cold.replace('1073741824','4194304')):
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                module.check_log(PASS.replace(cold,replacement))
+        with self.assertRaises(ValueError):
+            module.check_log(PASS.replace(cold+'\n'+original,original+'\n'+cold))
+        with self.assertRaises(ValueError):
+            module.check_log(PASS+'\n'+original+'\n')
+
     def test_first_leaf_requires_zero_publication_and_restored_accounting(self):
         original = 'DMA_AUDIT_FAULT id=5 mode=0 ordinal=1 published=0 table=0'
         for replacement in (
