@@ -587,6 +587,37 @@ five source pins só no preparer da VM. Novo Actions/actual ENOMEM/unwind/free
 ainda pendente; accounting de todos failure sites, ativação real Xiaomi,
 runtime composto e hardware continuam obrigatórios. T20 permanece ~.
 
+### Checkpoint — endereço ADRP/ADD não adjacente coberto, rota ainda aberta
+
+Scanner stock agora segue ADRP até ADD imediato64 em janela linear de oito
+instruções, sem cruzar símbolo, branch/call/return/trap, decode desconhecido,
+write do X/W correspondente (incl. FP/LR aliases e load/store writeback).
+Register31 descartado. Capstone register-write/control detalhe aplicado só à
+janela; módulo scanner que usa ORR mantém dependência lazy, seu ELF test passou.
+Nenhuma reaching-state inventada através de branch/copy/load; candidate ≠ CFG.
+
+Oito decoder tests passaram: nonadjacent STR-read permitido, X/W/FP/LR writes,
+load e pre-index/pair-store writeback recusados, controls/trap/boundary/window8,
+ADD in-place stop, shifts/encodings contra Capstone, 16.384 logical immediates,
+80 ADR signed-boundary cases. Initial failures revelaram UDF decodificado mas
+sem grupo de trap (stop explícito) e ADD SP,#0 alias MOV com dois operandos
+(fixture agora reconhece sem presumir terceiro operand). Backprop §B proposta:
+decoder groups/alias shape ≠ semântica completa; negativos mantidos; SPEC intacto.
+
+Actual exact-stock scan concluído em outputs/stock-dma-activation-patterns-
+20261006-v3.json: 0direct entrybranches, 0entry address patterns (agora inclui
+nonadjacent), 0absolute entryvalues; mesmos1661 ORR masks incluindo bit39.
+Não fecha loaded/register-copy/relocation/dynamic/entry-offset routes nem
+store de VMA/reachability; resultado negativo não autoriza dizer unused.
+
+Guest compile run37494587573/head14c66587c2dae3ccedf2a0f06eb8f5849a96534e
+completed success, artifact real lido em outputs/dma-guest-source-37494587573:
+static AArch64 ELF e initramfs1561088bytes/SHA
+1a5a5473b8411c0ef27e2fe25100b32f4c35f0779d4f5dc1b28bd5912f6142ed.
+Esse job não executa VM. Produtor37494587692 confirmado Compile audit kernel
+in_progress após source/integration/format/selector gates aprovados.
+Runtime partial-ENOMEM/free, original activation e hardware continuam pendentes.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

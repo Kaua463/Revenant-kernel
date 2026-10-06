@@ -50,6 +50,63 @@ def orr_mask(word):
     return sum(value << position for position in range(0, width, element))
 
 
+def add_immediate(word):
+    # 64-bit ADD (not ADDS/SUB/32-bit or shifted-register ADD).
+    if word & 0xff800000 != 0x91000000:
+        return None
+    return word & 31, (word >> 5) & 31, ((word >> 10) & 4095) << (12 if word & (1 << 22) else 0)
+
+
+def page_add_candidates(data, offset, pc, target, boundaries=(), decoder=None):
+    """Bounded linear pattern only. Stop on clobbers/control/boundaries/unknown."""
+    # Lazy dependency: module inventory using only orr_mask needs no Capstone.
+    from capstone import (Cs, CsError, CS_ARCH_ARM64, CS_MODE_ARM,
+                          CS_GRP_JUMP, CS_GRP_CALL, CS_GRP_RET, CS_GRP_INT, CS_GRP_IRET)
+    decoded = adr(struct.unpack_from('<I', data, offset)[0], pc)
+    if decoded is None or not decoded[2] or decoded[0] == 31:
+        return []
+    register, address, _ = decoded
+    delta = target - address
+    if not (0 <= delta <= 4095 or 0 <= delta <= 4095 << 12 and delta % 4096 == 0):
+        return []
+    if decoder is None:
+        decoder = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+        decoder.detail = True
+    found = []
+    for distance in range(1, 9):
+        position = offset + 4 * distance
+        site = pc + 4 * distance
+        if position + 4 > len(data) or site in boundaries:
+            break
+        payload = bytes(data[position:position + 4])
+        instructions = list(decoder.disasm(payload, site, count=1))
+        if len(instructions) != 1 or instructions[0].size != 4:
+            break
+        instruction = instructions[0]
+        if any(instruction.group(group) for group in (CS_GRP_JUMP, CS_GRP_CALL, CS_GRP_RET, CS_GRP_INT, CS_GRP_IRET)):
+            break
+        if instruction.mnemonic in ('eret', 'drps', 'brk', 'hlt', 'svc', 'hvc', 'smc', 'udf'):
+            break
+        addition = add_immediate(struct.unpack('<I', payload)[0])
+        if addition and addition[1] == register and addition[0] != 31 and address + addition[2] == target:
+            found.append({'add_site': hex(site), 'distance_instructions': distance,
+                          'page_register': register, 'destination': addition[0]})
+        try:
+            _, writes = instruction.regs_access()
+        except CsError:
+            break
+        names = {decoder.reg_name(item) for item in writes}
+        # A W-register write also destroys the corresponding X value.
+        aliases = {f'x{register}', f'w{register}'}
+        if register == 29:
+            aliases.add('fp')
+        if register == 30:
+            aliases.add('lr')
+        if names & aliases:
+            break
+    return found
+
+
 def run(args):
     for path, sha in ((args.image, IMAGE_SHA), (args.symbols, SYMBOL_SHA)):
         if hashlib.sha256(path.read_bytes()).hexdigest() != sha:
@@ -59,6 +116,7 @@ def run(args):
     kernel = evidence.Kernel(args.image, args.symbols)
     target = kernel.address('dmabuf_huge_remap_pfn_range')
     addresses = sorted(kernel.names_at)
+    boundaries = set(addresses)
     def record(pc, **fields):
         index = bisect_right(addresses, pc) - 1
         return dict(site=hex(pc), inferred_owner=kernel.names_at[addresses[index]] if index >= 0 else [], **fields)
@@ -72,6 +130,9 @@ def run(args):
     if not regions:
         raise ValueError('no verified text regions')
     direct, materialized, masks = [], [], []
+    from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
+    decoder = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+    decoder.detail = True
     for low, high in regions:
         data = memoryview(kernel.data)[low - kernel.base:high - kernel.base]
         for offset in range(0, len(data) - 3, 4):
@@ -85,13 +146,8 @@ def run(args):
                 if not page and address == target:
                     materialized.append(record(pc, kind='ADR', register=register))
                 if page:
-                    # Adjacent ADD only: no invented reaching-register state.
-                    if offset + 8 <= len(data):
-                        following = struct.unpack_from('<I', data, offset + 4)[0]
-                        if following & 0xff800000 == 0x91000000 and (following >> 5) & 31 == register:
-                            immediate = ((following >> 10) & 4095) << (12 if following & (1 << 22) else 0)
-                            if address + immediate == target:
-                                materialized.append(record(pc, kind='adjacent_ADRP_ADD', register=register))
+                    for candidate in page_add_candidates(data, offset, pc, target, boundaries, decoder):
+                        materialized.append(record(pc, kind='bounded_linear_ADRP_ADD', **candidate))
             mask = orr_mask(word)
             if mask is not None and mask & (1 << 39):
                 masks.append(record(pc, mask=hex(mask), only_bit39=mask == 1 << 39,
@@ -109,7 +165,8 @@ def run(args):
                   absolute_entry_values=absolute, orr_masks_containing_bit39=masks,
                   limits=['text includes possible padding/CFI data; no CFG reachability proof',
                           'ORR bit39 does not prove VMA ownership or a vm_flags store',
-                          'nonadjacent/register/relocated/dynamic lookups not resolved',
+                          'ADRP/ADD window at most 8 instructions; no register-copy/loaded/relocated/dynamic lookup resolution',
+                          'linear patterns stop on control/clobbers/symbols; no incoming-edge or CFG reachability proof',
                           'external modules and runtime configuration not inspected here',
                           'no matches does not prove feature unused'])
     with args.output.open('x') as stream:
