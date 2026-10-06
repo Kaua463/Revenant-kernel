@@ -10,6 +10,13 @@ repo = Path(__file__).parents[1]
 
 
 class Fragment(unittest.TestCase):
+    def test_valid_kconfig_lowercase_symbol(self):
+        # Exact trigger in run 37408379865's compiled .config, line 7428.
+        self.assertEqual(module.settings('CONFIG_FONT_8x16=y\n# CONFIG_FONT_6x11 is not set\n'),
+                         {'CONFIG_FONT_8x16': 'y', 'CONFIG_FONT_6x11': 'n'})
+        with self.assertRaisesRegex(ValueError, 'duplicate'):
+            module.settings('CONFIG_FONT_8x16=y\n# CONFIG_FONT_8x16 is not set\n')
+
     def test_pinned_inputs_preserve_all_root_values(self):
         with tempfile.TemporaryDirectory(prefix='dma-fragment-') as temp:
             args = argparse.Namespace(root=repo / 'configs/rodin-6.6.77-ksun-susfs.fragment',

@@ -381,6 +381,32 @@ Headers page_to_phys ARM64 verificados no ACK exato em
 outputs/stock-ack-dma-physical-api-reference-20261006; definido em asm/memory.h,
 incluído por asm/pgtable.h usado pelo producer. Sem ajuste adivinhado de API.
 
+### Build composto: sucesso de compile/ABI, falha no parser pós-build
+
+Actions 37408379865 terminou **failure**, não verde: compile composto passou;
+log registra providers, KFENCE, stock config e referência 610 módulos/78
+signatures/3506 kernel-import CRCs/certificado embedded aprovados. Falha seguinte
+em settings(config): regex uppercase-only rejeitou CONFIG_FONT_8x16=y
+(config artifact linha 7428). Artifact preservado localmente em
+outputs/dma-root-build-audit-37408379865, incluindo config/Module.symvers/logs;
+Image/vmlinux não distribuídos, logo audit de ROM não foi reexecutado localmente.
+
+Backprop: bug no verificador, não evidência de incompatibilidade DMA nem
+config errado. Teste regression test_valid_kconfig_lowercase_symbol falhou no
+parser antigo; fix aceita A-Za-z0-9_ para enabled/disabled, mantém duplicate e
+malformed rejection. Cinco testes passaram. Config **real** do run falho:
+6186 symbols parseados e todas 23 opções pinned root/DMA iguais; KFENCE e
+stock-alignment também revalidados localmente. Composed workflow validator Ruby
+passou quatro negativos. SPEC proposta para registro §B: parser uppercase-only
+rejeita identificador Kconfig válido → aceitar case-preserving + regression;
+sem nova §V necessária (bug de grammar no gate), SPEC não alterado sem aprovação.
+
+Produtor compile-only já iniciado pelo push: run 37426751994, head
+6e5e182f6fbed564ea13b3f5731add766d5ac9eb, Fetch pinned ACK ativo no snapshot.
+Não reiniciado/cancelado. Fix do parser composto será novo run serial; failure
+antigo preservado, não relabelado sucesso. Runtime/MMU/SMP/producer real ainda
+pendentes.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

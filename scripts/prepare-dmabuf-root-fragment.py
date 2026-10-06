@@ -12,8 +12,8 @@ DMA_SHA = '44ad00eb3209e4e5f66b3863647ae845de016ca353666767c642626445c511f3'
 def settings(text):
     values = {}
     for line in text.splitlines():
-        enabled = re.fullmatch(r'(CONFIG_[A-Z0-9_]+)=(.+)', line)
-        disabled = re.fullmatch(r'# (CONFIG_[A-Z0-9_]+) is not set', line)
+        enabled = re.fullmatch(r'(CONFIG_[A-Za-z0-9_]+)=(.+)', line)
+        disabled = re.fullmatch(r'# (CONFIG_[A-Za-z0-9_]+) is not set', line)
         if not enabled and not disabled:
             if line.startswith('CONFIG_'):
                 raise ValueError('malformed config setting')
