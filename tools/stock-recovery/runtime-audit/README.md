@@ -99,3 +99,20 @@ Pristine reference validation uses a temporary independent Git root so an
 unrelated workflow checkout cannot filter patch paths. Seven integration tests
 include that runner-specific regression. Canonical patch/path/hash gates remain
 unchanged.
+
+`guest-init.c` is static PID1 for the RAM archive only: mounts proc/sysfs,
+creates exactly the two misc nodes from their technical sysfs dev numbers,
+executes the workload and powers off. GKI has no built-in devtmpfs here, so the
+archive includes only the standard 5:1 console node; audit nodes are discovered,
+not guessed. `build-dmabuf-vm-initramfs.py` requires static AArch64 ELF executables,
+uses deterministic newc/root metadata, and refuses existing output. Four tests
+decode the archive independently and reject dynamic/wrong/truncated ELF/overwrite.
+
+`run-dmabuf-vm-audit.py` checks built-in VM prerequisites and ARM64 Image magic,
+then runs four-CPU QEMU virt with no network, disks, monitor or host-directory
+shares, with bounded timeout. It saves serial logs on timeout/failure and
+requires both device-case markers, guest and PID1 completion, no panic/BUG/Oops/
+warning, plus QEMU zero exit. Runner mock tests are **not VM execution**.
+Producer workflow now includes this runtime step with ephemeral binaries/archive;
+only logs/config/reports/tool versions are uploaded, never kernel or flash files.
+Until actual serial evidence passes, runtime remains unproven.

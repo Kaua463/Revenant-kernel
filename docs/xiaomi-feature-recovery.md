@@ -434,6 +434,30 @@ preparado; YAML/Bash parseados, outputs só metadata/checksums/refusal, sem
 kernel/flash/runtime-success. Trigger do produtor reduzido aos quatro inputs
 reais, evitando recompilar kernel por mudanças futuras no workload userspace.
 
+### Preparação do boot real QEMU e gates de serial
+
+Userspace compile run 37427488820/head bf9907f completed success (native Linux
+e static AArch64 workload, x86 refusal); não runtime. Composto 37426905255
+Compile composed DMA audit ativo, produtor 37427489007 ainda pending no snapshot.
+
+Novo guest-init.c PID1 mounts somente proc/sysfs, cria dois misc nodes por
+sysfs dev exato (major10), executa workload e poweroff. Config real ACK control
+tem PL011/console, initrd, ELF, PSCI, SMP, proc/sysfs built-in, mas devtmpfs não;
+não presumir devtmpfs. Console5:1 no arquivo RAM, audit nodes não hardcoded.
+Init source ainda pending compile. Builder newc determinístico aceita somente
+static AArch64 ELF, uid/gid/time0, sete entries fixas/trailer/padding512; recusa
+output existente/symlink. Quatro testes decode independente/determinism/ELF
+negativos/output preservation passaram.
+
+Runner QEMU quatro CPUs/1GiB, sem nic/disk/monitor/host share, timeout bounded,
+config prerequisites/Image magic, serial preservado e fail-closed em markers
+faltando/duplicados, kernel warn/BUG/Oops/panic, timeout/nonzero. Tests de policy
+e processo mocked não são guest execution. Workflow produtor acrescenta compile
+init/workload + archive + boot QEMU no mesmo runner; artifacts restringidos a
+logs/config/JSON/versions, excluindo kernel/archive/executáveis. YAML/Bash gates
+passaram; nenhuma alegação de VM verde antes de serial real. ENOMEM parcial,
+free final e stock producer continuam pending mesmo se workload básico passar.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

@@ -8,6 +8,12 @@ on:
       - .github/workflows/audit-rodin-dma-producer.yml
       - scripts/prepare-dmabuf-runtime-audit.py
       - scripts/test-dmabuf-runtime-integration.py
+      - scripts/run-dmabuf-vm-audit.py
+      - scripts/test-dmabuf-vm-runner.py
+      - scripts/build-dmabuf-vm-initramfs.py
+      - tools/stock-recovery/runtime-audit/guest-init.c
+      - tools/stock-recovery/runtime-audit/guest-workload.c
+      - tools/stock-recovery/runtime-audit/audit-data.h
       - tools/stock-recovery/runtime-audit/recovered-dma-audit.c
       - tools/stock-recovery/runtime-audit/audit-map-contract.h
       - tools/stock-recovery/runtime-audit/Kconfig
@@ -55,6 +61,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             bc bison build-essential ca-certificates curl flex git libelf-dev \
             libssl-dev lz4 python3 python3-pyelftools rsync xz-utils zip zstd
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-arm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
           mkdir -p "$RUNNER_TEMP/bin"
           curl --fail --location --retry 5 \
             https://storage.googleapis.com/git-repo-downloads/repo \
@@ -137,6 +145,30 @@ jobs:
           git -C ws/common diff --stat > dma-evidence/source-diff-stat.txt
           repo_manifest=ws/.repo/manifests
           git -C "$repo_manifest" rev-parse HEAD > dma-evidence/build-manifest-commit.txt
+      - name: Run RAM-only ARM64 QEMU audit
+        run: |
+          set -euo pipefail
+          python3 scripts/test-dmabuf-vm-initramfs.py
+          python3 scripts/test-dmabuf-vm-runner.py
+          source_dir=tools/stock-recovery/runtime-audit
+          aarch64-linux-gnu-gcc -std=c11 -O1 -Wall -Wextra -Werror -pthread -static \
+            "$source_dir/guest-workload.c" -o dma-evidence/arm64-guest
+          aarch64-linux-gnu-gcc -std=c11 -O1 -Wall -Wextra -Werror -static \
+            "$source_dir/guest-init.c" -o dma-evidence/arm64-init
+          python3 scripts/build-dmabuf-vm-initramfs.py --init dma-evidence/arm64-init \
+            --guest dma-evidence/arm64-guest --output dma-evidence/initramfs.cpio \
+            > dma-evidence/initramfs-report.json
+          mapfile -t images < <(find -L ws/bazel-bin -type f -name Image -path '*kernel_aarch64*')
+          test "${#images[@]}" -ge 1
+          for image in "${images[@]}"; do
+            cmp "${images[0]}" "$image"
+          done
+          qemu-system-aarch64 --version > dma-evidence/qemu-version.txt
+          aarch64-linux-gnu-gcc --version > dma-evidence/guest-compiler-version.txt
+          python3 scripts/run-dmabuf-vm-audit.py --kernel "${images[0]}" \
+            --config dma-evidence/config --initramfs dma-evidence/initramfs.cpio \
+            --output dma-evidence/vm --timeout 240
+          # Do not upload kernel/initramfs/binaries; runtime evidence only below.
       - name: Preserve audit logs (no installer or device operation)
         if: always()
         uses: actions/upload-artifact@v4
@@ -144,5 +176,9 @@ jobs:
           name: dma-producer-compile-${{ github.run_number }}
           path: |
             dma-build.log
-            dma-evidence/
+            dma-evidence/*.json
+            dma-evidence/*.txt
+            dma-evidence/config
+            dma-evidence/vm/serial.log
+            dma-evidence/vm/report.json
           if-no-files-found: warn

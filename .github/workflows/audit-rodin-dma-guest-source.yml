@@ -8,6 +8,9 @@ on:
       - tools/stock-recovery/runtime-audit/guest-workload.c
       - tools/stock-recovery/runtime-audit/audit-data.h
       - tools/stock-recovery/runtime-audit/test_audit_data.c
+      - tools/stock-recovery/runtime-audit/guest-init.c
+      - scripts/build-dmabuf-vm-initramfs.py
+      - scripts/test-dmabuf-vm-initramfs.py
 permissions:
   contents: read
 jobs:
@@ -33,6 +36,19 @@ jobs:
             "$source_dir/guest-workload.c" -o guest-evidence/native-guest
           aarch64-linux-gnu-gcc -std=c11 -O1 -Wall -Wextra -Werror -pthread -static \
             "$source_dir/guest-workload.c" -o guest-evidence/arm64-guest
+          gcc -std=c11 -O1 -Wall -Wextra -Werror \
+            "$source_dir/guest-init.c" -o guest-evidence/native-init
+          aarch64-linux-gnu-gcc -std=c11 -O1 -Wall -Wextra -Werror -static \
+            "$source_dir/guest-init.c" -o guest-evidence/arm64-init
+          if guest-evidence/native-init > guest-evidence/native-init-refusal.txt 2>&1; then
+            echo 'ERROR: guest init accepted outside PID1' >&2
+            exit 1
+          fi
+          grep -q 'disposable guest PID1 required' guest-evidence/native-init-refusal.txt
+          python3 scripts/test-dmabuf-vm-initramfs.py
+          python3 scripts/build-dmabuf-vm-initramfs.py --init guest-evidence/arm64-init \
+            --guest guest-evidence/arm64-guest --output guest-evidence/initramfs.cpio \
+            > guest-evidence/initramfs-report.json
           aarch64-linux-gnu-readelf -h guest-evidence/arm64-guest > guest-evidence/arm64-elf.txt
           grep -q 'Machine:.*AArch64' guest-evidence/arm64-elf.txt
           if guest-evidence/native-guest --disposable-qemu-vm > guest-evidence/native-refusal.txt 2>&1; then
@@ -52,5 +68,7 @@ jobs:
           path: |
             guest-evidence/arm64-elf.txt
             guest-evidence/native-refusal.txt
+            guest-evidence/native-init-refusal.txt
+            guest-evidence/initramfs-report.json
             guest-evidence/checksums.txt
           if-no-files-found: warn
