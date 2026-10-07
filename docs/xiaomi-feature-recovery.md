@@ -1119,6 +1119,49 @@ Backprop proposto, sem alterar SPEC sem aprovação: §V exige respeitar frontei
 VMA após mprotect e testar rejeição/destino/transferência segmentada; §B registra
 suposição incorreta de merge VM_SPECIAL no guest. Nova execução VM pendente.
 
+### Fechamento dos gates executados — guest `3d2eac9`, kernel sem nova alteração
+
+- Controle `37536101129`: n/y concluídos com sucesso; artefatos conferidos
+  localmente. n: zero providers, vmlinux
+  `d23ee2e96d7cb4f7c3d21dd165c62b85066a02eb0872ee14433af41c6081f6c7`;
+  y: 14 providers, vmlinux
+  `0c14dfc67cd9af0b7ce43f072dd912dc6db74153157e0f85f1659ac6820e2ad1`.
+  Ambos usam o overlay atual; hashes de config baixados conferem.
+- Guest corrigido `37541921970`: compilação Linux/AArch64 passou, fonte
+  SHA256 `b923e4d9914eae7e7c45d964c1ed3d2be8b9d05a270d33053f9606a125524148`
+  conferida; initramfs reportado coincide com execução VM abaixo.
+- VM `37541921953`: sucesso. ARM64/QEMU, quatro CPUs, 1GiB RAM, sem disco/rede
+  ou acesso ao Poco. Parser atual executado novamente sobre serial/config
+  baixados: 12 pré-fork, 12 movimentos segmentados pós-fork, oito falhas ENOMEM
+  com retry, dez liberações misc e duas export, exatamente uma por backing.
+  Helpers reais: 12 huge moves e 23 huge splits; pré-fork exige dois/um por caso
+  PMD e zero por PTE; splits pós-fork adicionais permitidos somente dentro do
+  lifetime PMD possuído. Dados, alinhamentos, PGD crossing, proteção,
+  compartilhamento fork, migração CPU e selected unwind/accounting passaram.
+  Serial SHA256 `f9cc40eb9d00a6f1f361a52a84e61ad472420d58b9a5b5a2e9a345697f4125f4`;
+  Image VM reportado
+  `b7499fee1cab60eb7853563648cf85adf049c44003eddb9115d22a7bb7849f6b`;
+  initramfs `9eb8b2d8bcdb5b7809d3eab1719c175f4b2113b1585f6e879965244a2eae92ea`.
+  Evidência: `outputs/dma-producer-37541921953`.
+
+Kernel/root source e recipes não mudaram entre `ba612f6` e `3d2eac9`; última
+correção limitada ao guest, runner, testes, workflow de auditoria e documentos.
+Resultado root/ABI `37536101164` permanece prova daquela mesma composição,
+não prova runtime KSU/SUSFS na VM separada.
+
+Verificação adicional Image stock hash-pinado: `dma_buf_fops` offsets 88/152
+contêm respectivamente `dma_buf_mmap_internal` e
+`dma_buf_hugetlb_get_unmapped_area`. Busca qword absoluta do endereço exato do
+mapper especial no Image encontrou zero entradas. Assim como zero BL/B,
+zero ponteiros absolutos não prova ausência de lookup/calls indiretos.
+
+Gates planejados acima encerrados. Limites não encerrados: todos os allocator
+failure sites/lifetimes possíveis, ativação pelo exportador GPU stock,
+carregamento real de módulos e hardware Poco. Status permanece
+REVIEW_ONLY_NOT_INSTALLABLE; T20 completo inclui outras famílias e segue `~`.
+Não modificar heaps para forçar ativação artificial, não publicar instalador,
+não flashar sem nova validação/autorização e rollback exato.
+
 ## Verificação executada
 
 - `python3 scripts/test-recover-stock-features.py`: seis testes; decodificação BL positiva/negativa, rejeição de instruções não-BL, boot incorreto, seleção de helpers genéricos.

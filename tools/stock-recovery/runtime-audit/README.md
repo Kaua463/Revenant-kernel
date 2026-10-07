@@ -53,7 +53,8 @@ the same restrictions, but inject ordinal-two allocation failure on the first
 valid mmap only. The normal devices do not arm failure injection.
 `recovered-dma-audit-first-pmd`/`-first-pte` add first-leaf failure cases with
 the same capability/0600/ownership limits. They are implemented but not yet
-validated in a VM. `recovered-dma-audit-table-pmd`/`-table-pte` add the cold-PUD
+validated in a VM at that checkpoint; run 37541921953 now passes those selected
+cases. `recovered-dma-audit-table-pmd`/`-table-pte` add the cold-PUD
 `__pmd_alloc` failure case. The guest checks an entire 1 GiB PGD-slot VA range
 with PROT_NONE/NO_REPLACE, unmaps it, then maps at 4/6 GiB respectively.
 The kernel independently requires the real PUD entry to be zero; a populated
@@ -70,7 +71,8 @@ Before creating any worker thread, each also reserves two empty 1 GiB VA slots
 with PROT_NONE/NO_REPLACE, removes that reservation, and maps a 4 MiB alias
 starting 2 MiB before the 16 GiB boundary. Every data word on both sides is
 checked, then the crossing alias is unmapped. No unrelated VMA is overwritten.
-The guest and strict serial gates are implemented, not yet VM-validated.
+The guest and strict serial gates now pass in run 37541921953 for these ten
+cases, with actual ARM64 page tables and four guest CPUs.
 High-order allocation can legitimately fail; no fallback to arbitrary memory.
 Mappings may cover aligned 2 or 4 MiB subsets, shared and non-executable only.
 The mmap callback validates overflow/bounds, checks every actual destination
@@ -98,6 +100,20 @@ same-address retry and four final-release gates on the actual four-CPU VM;
 downloaded serial/config were checked again locally. Full failure-site/accounting
 matrix, stock producer activation and hardware remain unproven.
 These tests are not installation/shipping approval.
+
+Current closure: run 37541921953, revision
+`3d2eac98f56e84809ce57474ea99510a82bf6ec7`, passes all ten misc and two
+DMA-BUF export cases. The downloaded serial passed the current strict parser
+again locally: twelve pre-fork move/protect/concurrent-read/CPU-migration
+markers, twelve post-fork fragmented-VMA moves, eight selected ENOMEM retries,
+ten misc releases and two export releases. The test explicitly requires EFAULT
+for a whole-range mremap crossing the three VM_SPECIAL VMAs created by partial
+mprotect, then moves each VMA separately. The older run 37536101158 failed on
+that invalid guest request; kernel semantics were not weakened to make it pass.
+The source/config n/y control run 37536101129 and root+DMA ABI run 37536101164
+also pass. VM source is separate from the root build; root runtime, every
+possible allocation failure/lifetime, stock GPU activation and phone hardware
+remain unverified. No shipping approval or phone image is implied.
 
 The audit producer now logs unique allocation IDs and a final release event
 after both real backing/storage frees return, without reading freed storage.
