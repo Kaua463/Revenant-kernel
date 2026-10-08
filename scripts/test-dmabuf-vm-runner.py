@@ -49,6 +49,36 @@ class ExtendedProof(unittest.TestCase):
                 module.check_extended_log(good.replace(before, after))
 
 
+def mock_vma():
+    lines = ['DMA_VMA_BEGIN']
+    for identity, (mode, site, ordinal) in enumerate(
+            [(mode, site, ordinal) for mode in (0, 1)
+             for site, ordinal in ((0, 1), (0, 2), (1, 1), (2, 1), (2, 2))], 200):
+        lines += [f'DMA_EXPORT_ALLOC id={identity} mode={mode} bytes=4194304',
+                  *[f'DMA_EXPORT_MMAP id={identity} mode={mode} bytes=4194304 offset=0 huge=1 result=0'] * 2,
+                  f'DMA_VMA_FAULT id={identity} mode={mode} site={site} ordinal={ordinal}',
+                  f'DMA_EXPORT_RELEASE id={identity} mode={mode}',
+                  f'DMA_VMA_PASS mode={mode} site={site} ordinal={ordinal} errno=12 retry=1 data_verified=1 live=0 tables_restored=1']
+    return '\n'.join(lines + ['DMA_VMA_END cases=10'])
+
+
+class VmaProof(unittest.TestCase):
+    def test_inventory(self):
+        module.check_vma_log(mock_vma())
+
+    def test_faked_missing_wrong_ownership_and_order(self):
+        good = mock_vma()
+        fault = 'DMA_VMA_FAULT id=200 mode=0 site=0 ordinal=1'
+        for changed in (good.replace(fault, ''), good.replace(fault, fault + '\n' + fault),
+                        good.replace(fault, fault.replace('id=200', 'id=201')),
+                        good.replace(fault, fault.replace('ordinal=1', 'ordinal=2')),
+                        good.replace('tables_restored=1', 'tables_restored=0', 1),
+                        good.replace('DMA_EXPORT_RELEASE id=200 mode=0', ''),
+                        'DMA_AUDIT_HUGE_SPLIT\n' + good):
+            with self.subTest(changed=changed[:100]), self.assertRaises(ValueError):
+                module.check_vma_log(changed)
+
+
 def mock_pass():
     lines = []
     for identity, mode, device, inject in ((1, 0, 'pmd', 0), (2, 1, 'pte', 0),
@@ -91,7 +121,7 @@ def mock_pass():
                       f'DMA_EXPORT_LAST_UNMAP mode={mode}',
                       f'DMA_EXPORT_RELEASE id={identity} mode={mode}',
                       f'DMA_EXPORT_CASE_PASS mode={mode} live=0'))
-    return '\n'.join(lines + [mock_extended(), 'DMA_GUEST_PASS: basic tests', 'DMA_VM_RESULT_PASS: finished'])
+    return '\n'.join(lines + [mock_extended(), mock_vma(), 'DMA_GUEST_PASS: basic tests', 'DMA_VM_RESULT_PASS: finished'])
 
 
 PASS = mock_pass()

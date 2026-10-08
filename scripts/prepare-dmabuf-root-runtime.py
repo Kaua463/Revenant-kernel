@@ -9,6 +9,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 root = SourceFileLoader('root_runtime_composition', str(HERE / 'integrate-dmabuf-after-root.py')).load_module()
 runtime = SourceFileLoader('root_runtime_producer', str(HERE / 'prepare-dmabuf-runtime-audit.py')).load_module()
+vma_faults = SourceFileLoader('root_vma_fault_sites', str(HERE / 'prepare-dmabuf-vma-fault-sites.py')).load_module()
 
 
 def validate_composition(source, report):
@@ -39,6 +40,9 @@ def run(args):
     path = runtime.regular_path(args.source, 'mm/huge_memory.c')
     before = path.read_bytes()
     changes['mm/huge_memory.c'] = (before, runtime.runtime_trace.transform(runtime.fault_sites.transform(before)))
+    for name in vma_faults.PINS:
+        before = runtime.regular_path(args.source, name).read_bytes()
+        changes[name] = (before, vma_faults.transform(name, before))
     for name, suffix in {
         'mm/Kconfig': '\n# Disposable root VM only.\nsource "mm/recovered-dma-audit/Kconfig"\n',
         'mm/Makefile': '\n# Disposable root VM only.\nobj-$(CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT) += recovered-dma-audit/\n',

@@ -27,6 +27,12 @@ class Integration(unittest.TestCase):
             for target in (self.source, self.reference):
                 (target / name).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(REFERENCE / name, target / name)
+        (self.source / 'kernel').mkdir()
+        fork_reference = REFERENCE / 'kernel/fork.c'
+        if not fork_reference.exists():
+            fork_reference = ROOT.parent.parent / 'outputs/stock-ack-dma-vma-free-reference-20261006/kernel/fork.c'
+        shutil.copyfile(fork_reference,
+                        self.source / 'kernel/fork.c')
         overlay = ROOT / 'tools/stock-recovery/overlays/dma-6.6.77'
         module.validator.run(SimpleNamespace(source=self.source, overlay=overlay, apply_review=True))
         self.args = SimpleNamespace(source=self.source, ack_reference=self.reference,
@@ -36,7 +42,7 @@ class Integration(unittest.TestCase):
         before = (self.source / 'mm/Kconfig').read_bytes()
         huge_before = (self.source / 'mm/huge_memory.c').read_bytes()
         report = module.run(self.args)
-        self.assertEqual(len(report['changes']), 10)
+        self.assertEqual(len(report['changes']), 12)
         self.assertEqual((self.source / 'mm/Kconfig').read_bytes(), before)
         self.assertEqual((self.source / 'mm/huge_memory.c').read_bytes(), huge_before)
         self.assertFalse((self.source / 'mm/recovered-dma-audit').exists())
@@ -59,7 +65,7 @@ class Integration(unittest.TestCase):
         # must not silently filter paths against that unrelated Git prefix.
         subprocess.run(['git', 'init', '-q', str(self.folder)], check=True)
         report = module.run(self.args)
-        self.assertEqual(len(report['changes']), 10)
+        self.assertEqual(len(report['changes']), 12)
 
     def test_target_drift_no_write(self):
         (self.source / 'mm/memory.c').write_text('drift')

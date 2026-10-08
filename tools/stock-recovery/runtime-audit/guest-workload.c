@@ -455,6 +455,93 @@ static void wait_export_empty(int factory)
 	fail("extended final release timeout");
 }
 
+static void exercise_vma_failures(void)
+{
+	int factory = open("/dev/recovered-dma-export-audit", O_RDWR | O_CLOEXEC);
+	if (factory < 0 || ioctl(factory, DMA_AUDIT_EXPORT_LIVE, 0))
+		fail("VMA baseline");
+	puts("DMA_VMA_BEGIN");
+	for (unsigned int mode = 0; mode < 2; mode++) {
+		for (unsigned int test = 0; test < 5; test++) {
+			unsigned int site = test < 2 ? 0 : test == 2 ? 1 : 2;
+			unsigned int ordinal = test == 1 || test == 4 ? 2 : 1;
+			long baseline = ioctl(factory, DMA_AUDIT_EXPORT_TABLE_BYTES, 0);
+			int fd = ioctl(factory, mode ? DMA_AUDIT_EXPORT_PTE : DMA_AUDIT_EXPORT_PMD, 0);
+			uintptr_t base = UINT64_C(0x2000000000) + ((uintptr_t)test << 32);
+			void *maps[2], *target = (void *)(base + (UINT64_C(2) << 30));
+			pid_t child = -1;
+			int status, result;
+			if (baseline < 0 || fd < 0)
+				fail("VMA buffer allocation");
+			for (unsigned int i = 0; i < 2; i++) {
+				void *address = (void *)(base + ((uintptr_t)i << 30));
+				maps[i] = mmap(address, BYTES, PROT_READ | PROT_WRITE,
+					MAP_SHARED | MAP_FIXED_NOREPLACE, fd, 0);
+				if (maps[i] != address)
+					fail("VMA cold-PGD map");
+			}
+			audit_fill(maps[0], BYTES, SEED);
+			verify(maps[1], 0, BYTES);
+			if (ioctl(factory, DMA_AUDIT_VMA_ARM(site, ordinal), 0))
+				fail("VMA fault arm");
+			errno = 0;
+			if (!site) {
+				result = mprotect((char *)maps[0] + BLOCK, 4096, PROT_READ);
+			} else if (site == 1) {
+				result = mremap(maps[0], BYTES, BYTES,
+					MREMAP_MAYMOVE | MREMAP_FIXED, target) == MAP_FAILED ? -1 : 0;
+			} else {
+				child = fork();
+				if (!child)
+					_exit(61); /* A successful child here is a failed test. */
+				result = child < 0 ? -1 : 0;
+			}
+			if (result != -1 || errno != ENOMEM ||
+			    ioctl(factory, DMA_AUDIT_VMA_FIRED, 0) != 1)
+				fail("VMA fault did not fire exactly once");
+			if (ioctl(factory, DMA_AUDIT_VMA_DISARM, 0))
+				fail("VMA fault disarm");
+			verify(maps[0], 0, BYTES);
+			verify(maps[1], 0, BYTES);
+			/* Retry the original operation through the real generic path. */
+			if (!site) {
+				if (mprotect(maps[0], BYTES, PROT_READ | PROT_WRITE))
+					fail("VMA split retry");
+			} else if (site == 1) {
+				void *moved = mremap(maps[0], BYTES, BYTES,
+					MREMAP_MAYMOVE | MREMAP_FIXED, target);
+				if (moved != target)
+					fail("VMA copy retry");
+				maps[0] = moved;
+			} else {
+				child = fork();
+				if (child < 0)
+					fail("VMA fork retry");
+				if (!child) {
+					verify(maps[0], 0, BYTES);
+					verify(maps[1], 0, BYTES);
+					_exit(0);
+				}
+				if (waitpid(child, &status, 0) != child ||
+				    !WIFEXITED(status) || WEXITSTATUS(status))
+					fail("VMA retry child teardown");
+			}
+			verify(maps[0], 0, BYTES);
+			verify(maps[1], 0, BYTES);
+			if (close(fd) || munmap(maps[0], BYTES) || munmap(maps[1], BYTES))
+				fail("VMA parent teardown");
+			wait_export_empty(factory);
+			if (ioctl(factory, DMA_AUDIT_EXPORT_TABLE_BYTES, 0) != baseline)
+				fail("VMA fault leaked parent page tables");
+			printf("DMA_VMA_PASS mode=%u site=%u ordinal=%u errno=12 retry=1 data_verified=1 live=0 tables_restored=1\n",
+				mode, site, ordinal);
+		}
+	}
+	if (close(factory))
+		fail("VMA factory close");
+	puts("DMA_VMA_END cases=10");
+}
+
 static void exercise_extended(void)
 {
 	int factory = open("/dev/recovered-dma-export-audit", O_RDWR | O_CLOEXEC);
@@ -567,6 +654,7 @@ int main(int argc, char **argv)
 	exercise_export(0);
 	exercise_export(1);
 	exercise_extended();
+	exercise_vma_failures();
 	puts("DMA_GUEST_PASS: basic mmap/fork/move/split/lifetime/SMP workload only");
 	return 0;
 }

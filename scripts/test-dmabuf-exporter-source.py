@@ -33,6 +33,10 @@ def validate(source):
         'dma_map_sgtable(attachment->dev, table, direction, 0)',
         'dma_unmap_sgtable(attachment->dev, table, direction, 0)',
         '.mmap = dma_export_audit_mmap', '.release = dma_export_audit_release', '.mode = 0600',
+        '!is_dma_buf_file(vma->vm_file)', 'dmabuf->ops != &dma_export_audit_ops',
+        'dma_audit_fault_check_site(&vma_fault_plan, (unsigned long)current,',
+        '(unsigned long)current->mm, site)', 'spin_lock(&vma_fault_lock)',
+        'command >= DMA_AUDIT_VMA_ARM(0, 1)', 'command <= DMA_AUDIT_VMA_DISARM',
     )
     for token in required:
         if token not in source:
@@ -53,7 +57,7 @@ def validate(source):
 def compile_formats(source):
     structure = re.search(r'struct export_buffer \{.*?\n\};',source,re.S)
     logs = re.findall(r'\bpr_info\((.*?)\);',source,re.S)
-    if not structure or len(logs) != 3:
+    if not structure or len(logs) != 4:
         raise ValueError('export log inventory drift')
     code = '''#include "audit-map-contract.h"
 #define EXPORT_BYTES (2UL * DMA_AUDIT_BLOCK_BYTES)
@@ -62,7 +66,7 @@ void checked_log(const char *, ...) __attribute__((format(printf,1,2)));
 void check_logs(void) {
  struct export_buffer storage = {0}, *buffer = &storage;
  unsigned long long id = 0;
- unsigned int mode = 0;
+ unsigned int mode = 0, site = 0, ordinal = 0;
  unsigned long length = 0, offset = 0;
  int result = 0;
 ''' + '\n'.join('checked_log('+log+');' for log in logs) + '\n}\n'

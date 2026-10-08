@@ -116,7 +116,7 @@ jobs:
           for source_path in mm/mmap.c mm/mremap.c mm/Kconfig mm/Makefile \
             include/linux/huge_mm.h include/linux/mm.h include/linux/mm_types.h \
             include/linux/pgtable.h arch/arm64/include/asm/pgtable.h \
-            mm/memory.c mm/huge_memory.c; do
+            mm/memory.c mm/huge_memory.c kernel/fork.c; do
             mkdir -p "runtime-reference/$(dirname "$source_path")"
             cp "ws/common/$source_path" "runtime-reference/$source_path"
           done

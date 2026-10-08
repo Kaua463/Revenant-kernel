@@ -55,6 +55,7 @@ jobs:
           ruby scripts/validate-dmabuf-root-build.rb
           ruby scripts/validate-dmabuf-root-vm.rb
           python3 scripts/test-dmabuf-root-runtime.py
+          python3 scripts/test-dmabuf-audit-fault-plan.py
           python3 scripts/test-dmabuf-root-fragment.py
           python3 scripts/test-dmabuf-root-integration-gates.py
           python3 scripts/test-dmabuf-build-gates.py

@@ -14,7 +14,7 @@ exporter-source fault-sites folded-levels generic-split-routing guest-data
 guest-prefork guest-split-move hardware-export module-activation move-safety
 root-fragment root-integration-gates runtime-integration runtime-producer-source
 runtime-trace stock-btf stock-callers vm-initramfs vm-runner wrapper-safety
-root-runtime boot-offline'''.split()
+root-runtime boot-offline vma-fault-sites'''.split()
 STOCK = '''remap-safety stock-remap-pmd stock-remap-pte stock-split stock-move
 stock-zap stock-range stock-wrappers stock-fork-hook stock-unmap-hook
 stock-move-hook stock-vma-hooks stock-deposit stock-pmd-set stock-table-rcu

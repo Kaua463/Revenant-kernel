@@ -13,10 +13,11 @@ ROOT = Path(__file__).resolve().parents[1]
 validator = SourceFileLoader('runtime_dma_validator', str(ROOT / 'scripts/validate-dmabuf-overlay.py')).load_module()
 fault_sites = SourceFileLoader('runtime_dma_fault_sites', str(ROOT / 'scripts/prepare-dmabuf-fault-sites.py')).load_module()
 runtime_trace = SourceFileLoader('runtime_dma_trace', str(ROOT / 'scripts/prepare-dmabuf-runtime-trace.py')).load_module()
+vma_faults = SourceFileLoader('runtime_vma_fault_sites', str(ROOT / 'scripts/prepare-dmabuf-vma-fault-sites.py')).load_module()
 PINS = {
     'recovered-dma-audit.c': '66ab45926e617544e8407a347a00d32ed8becbd7b05a4c5f1729c886ec1ba1fa',
-    'recovered-dma-export-audit.c': '310e5fb8df46ff38992bcdd947064bb97c682b17b9663957c36d0795b976f545',
-    'audit-export-contract.h': '9cf0064f23135b77d15e836dcaddb0cdfc707bf1901b78a2564c91af0f003041',
+    'recovered-dma-export-audit.c': 'd5c1610d2cfb50650586fa90162a2fd090aaea4dcd6ba197c31844626334233b',
+    'audit-export-contract.h': '34686dbf16f2fac2c3902aeb1514cd8fd8bfa6cd680d687f1b1893827f61aac9',
     'audit-fault-plan.h': 'd048158044314fd7ae69a4250cf7ea9e13299986deea3709b1baef35cd5b99f5',
     'audit-map-contract.h': '3bcb3044740336508a49ea37b4af205a52c0510cf9bc0ff3cd6f751709d0388c',
     'Kconfig': '4771cb7d047b3723f804d36d1ab234c5c67a0f0e85b76cc161319ddf97367c17',
@@ -70,6 +71,9 @@ def run(args):
         changes['mm/recovered-dma-audit/' + name] = (None, data)
     before = regular_path(args.source, 'mm/huge_memory.c').read_bytes()
     changes['mm/huge_memory.c'] = (before, runtime_trace.transform(fault_sites.transform(before)))
+    for name in vma_faults.PINS:
+        before = regular_path(args.source, name).read_bytes()
+        changes[name] = (before, vma_faults.transform(name, before))
     for name, suffix in {
         'mm/Kconfig': '\n# Disposable VM audit only; never a phone build.\nsource "mm/recovered-dma-audit/Kconfig"\n',
         'mm/Makefile': '\n# Disposable VM audit only.\nobj-$(CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT) += recovered-dma-audit/\n',

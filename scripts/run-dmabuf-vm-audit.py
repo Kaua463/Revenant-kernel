@@ -24,6 +24,12 @@ def check_log(text):
     error = re.search(r'DMA_(?:GUEST_FAIL|VM_RESULT_FAIL|AUDIT_FAULT_FAIL|AUDIT_ACCOUNTING_FAIL)|BUG:|WARNING:|Oops:|Kernel panic|Call trace:',text)
     if error:
         raise ValueError('guest/kernel failure reported: '+error.group(0))
+    if text.count('DMA_VMA_BEGIN') != 1 or text.count('DMA_VMA_END cases=10') != 1:
+        raise ValueError('VMA fault workload missing or duplicated')
+    start = text.index('DMA_VMA_BEGIN')
+    end = text.index('DMA_VMA_END cases=10', start)
+    check_vma_log(text[start:end])
+    text = text[:start] + text[end:]
     if text.count('DMA_EXT_BEGIN') != 1 or text.count('DMA_EXT_END faults=8 lifetime=16 children=32') != 1:
         raise ValueError('extended failure/lifetime workload missing or duplicated')
     start = text.index('DMA_EXT_BEGIN')
@@ -135,6 +141,37 @@ def check_log(text):
                   if start < event.start() < end]
         if owners != [0]:
             raise ValueError('huge-helper event outside unique owned PMD lifetime')
+
+
+def check_vma_log(text):
+    pattern = [(mode, site, ordinal) for mode in (0, 1)
+               for site, ordinal in ((0, 1), (0, 2), (1, 1), (2, 1), (2, 2))]
+    rows = list(re.finditer(r'DMA_EXPORT_ALLOC id=([1-9][0-9]*) mode=([01]) bytes=4194304\r?\n', text))
+    if len(rows) != 10 or len({r.group(1) for r in rows}) != 10:
+        raise ValueError('VMA allocation inventory')
+    if 'DMA_AUDIT_HUGE' in text[:rows[0].start()]:
+        raise ValueError('unowned VMA huge event before allocation')
+    expected_counts = {'DMA_EXPORT_ALLOC': 10, 'DMA_EXPORT_RELEASE': 10,
+                       'DMA_EXPORT_MMAP': 20, 'DMA_VMA_FAULT': 10, 'DMA_VMA_PASS': 10}
+    for token, count in expected_counts.items():
+        if text.count(token) != count:
+            raise ValueError('VMA missing/duplicate event: ' + token)
+    for index, (row, (mode, site, ordinal)) in enumerate(zip(rows, pattern)):
+        part = text[row.start():rows[index + 1].start() if index < 9 else len(text)]
+        identity = row.group(1)
+        fault = f'DMA_VMA_FAULT id={identity} mode={mode} site={site} ordinal={ordinal}'
+        release = f'DMA_EXPORT_RELEASE id={identity} mode={mode}'
+        done = (f'DMA_VMA_PASS mode={mode} site={site} ordinal={ordinal} errno=12 '
+                'retry=1 data_verified=1 live=0 tables_restored=1')
+        mapping = f'DMA_EXPORT_MMAP id={identity} mode={mode} bytes=4194304 offset=0 huge=1 result=0'
+        if (int(row.group(2)) != mode or part.count(mapping) != 2 or
+                any(part.count(marker) != 1 for marker in (fault, release, done)) or
+                not part.rindex(mapping) < part.index(fault) < part.index(release) < part.index(done)):
+            raise ValueError('VMA owned fault/retry/lifetime order')
+        for event in re.finditer(r'DMA_AUDIT_HUGE[^\r\n]*', part):
+            if (mode != 0 or event.group() not in ('DMA_AUDIT_HUGE_MOVE', 'DMA_AUDIT_HUGE_SPLIT') or
+                    not part.index(mapping) < event.start() < part.index(release)):
+                raise ValueError('unowned VMA huge event')
 
 
 def check_extended_log(text):
@@ -288,7 +325,8 @@ def run(args):
                      'real DMA-BUF core to exporter mmap, 4K/64K/2M/4M alignment including nonaligned hints',
                      'two DMA-BUF-owned buffers survive fd close/fork/move until final unmap',
                      'eight exporter acquisition failures unwind through actual kernel cleanup',
-                     'sixteen dual-child lifetimes with explicit unmap and real exit_mmap; parent cold-PGD accounting restored; eighteen extended buffers released once'] if reason is None else [],
+                     'sixteen dual-child lifetimes with explicit unmap and real exit_mmap; parent cold-PGD accounting restored; eighteen extended buffers released once',
+                     'ten owned VMA-duplication ENOMEM cases: split first/second, copy first, fork first/second; retry/data/final release/parent table restoration'] if reason is None else [],
         'pending': ['all allocator failure sites and accounting', 'stock GPU producer activation', 'hardware/complete lifetime'],
     }
     (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')

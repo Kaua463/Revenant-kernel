@@ -69,16 +69,21 @@ class RootRuntime(unittest.TestCase):
         # exact root manifests are mandatory in the remote integration stage.
         (self.source / 'mm').mkdir()
         (self.source / 'mm/huge_memory.c').write_bytes(b'fixture huge memory')
+        (self.source / 'kernel').mkdir()
+        for name in m.vma_faults.PINS:
+            (self.source / name).write_bytes(b'fixture vma')
         for name in ['mm/Kconfig', 'mm/Makefile']:
             (self.source / name).write_text('root fixture preserved\n')
         composition = self.folder / 'composition.json'
         composition.write_text(json.dumps(self.report))
         args = argparse.Namespace(source=self.source, composition=composition, output=self.folder / 'result.json')
         with patch.object(m.runtime.fault_sites, 'transform', return_value=b'fault fixture') as faults, \
-             patch.object(m.runtime.runtime_trace, 'transform', return_value=b'trace fixture') as traces:
+             patch.object(m.runtime.runtime_trace, 'transform', return_value=b'trace fixture') as traces, \
+             patch.object(m.vma_faults, 'transform', return_value=b'vma instrumented') as vmas:
             m.run(args)
             faults.assert_called_once_with(b'fixture huge memory')
             traces.assert_called_once_with(b'fault fixture')
+            self.assertEqual(vmas.call_count, 2)
         self.assertEqual((self.source / 'path0').read_text(), 'fixture0')
         self.assertTrue((self.source / 'mm/Kconfig').read_text().startswith('root fixture preserved\n'))
         self.assertTrue((self.source / 'mm/recovered-dma-audit/recovered-dma-export-audit.c').is_file())

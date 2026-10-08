@@ -17,6 +17,8 @@
 #include <linux/xiaomi_dmabuf_huge.h>
 #include "audit-map-contract.h"
 #include "audit-export-contract.h"
+#include "audit-fault-plan.h"
+#include <linux/spinlock.h>
 
 #if defined(MODULE) || !defined(CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT) || \
     !defined(CONFIG_XIAOMI_DMABUF_HUGETLB) || !defined(CONFIG_ARM64_4K_PAGES) || \
@@ -40,6 +42,8 @@ struct export_buffer {
 static atomic_t export_live = ATOMIC_INIT(0);
 static atomic64_t export_next_id = ATOMIC64_INIT(0);
 static struct miscdevice dma_export_audit_device;
+static DEFINE_SPINLOCK(vma_fault_lock);
+static struct dma_audit_fault_plan vma_fault_plan;
 int recovered_dma_audit_plain_remap(struct vm_area_struct *, unsigned long, unsigned int);
 
 static struct sg_table *export_map(struct dma_buf_attachment *attachment,
@@ -161,6 +165,33 @@ static const struct dma_buf_ops dma_export_audit_ops = {
 	.mmap = dma_export_audit_mmap,
 };
 
+/* Invoked only from the disposable VM's generic VMA allocation edges.
+ * File/ops identity prevents injecting faults into unrelated process VMAs.
+ * Tokens identify the arming task/mm; no stored pointer is dereferenced. */
+bool recovered_dma_audit_vma_fail(struct vm_area_struct *vma, unsigned int site)
+{
+	struct dma_buf *dmabuf;
+	struct export_buffer *buffer;
+	bool fired;
+	unsigned int ordinal;
+	if (!vma->vm_file || !is_dma_buf_file(vma->vm_file))
+		return false;
+	dmabuf = vma->vm_file->private_data;
+	if (dmabuf->ops != &dma_export_audit_ops)
+		return false;
+	buffer = dmabuf->priv;
+	spin_lock(&vma_fault_lock);
+	/* Local site selector uses the existing checked ordinal mechanism. */
+	fired = dma_audit_fault_check_site(&vma_fault_plan, (unsigned long)current,
+		(unsigned long)current->mm, site);
+	ordinal = vma_fault_plan.ordinal;
+	spin_unlock(&vma_fault_lock);
+	if (fired)
+		pr_info("DMA_VMA_FAULT id=%llu mode=%u site=%u ordinal=%u\n",
+			buffer->id, buffer->mode, site, ordinal);
+	return fired;
+}
+
 static int export_open(struct inode *inode, struct file *file)
 {
 	if (!capable(CAP_SYS_ADMIN))
@@ -180,6 +211,28 @@ static long dma_export_audit_ioctl(struct file *file, unsigned int command, unsi
 		return -EPERM;
 	if (file->private_data != &dma_export_audit_device)
 		return -ENODEV;
+	if (command >= DMA_AUDIT_VMA_ARM(0, 1) && command <= DMA_AUDIT_VMA_DISARM) {
+		unsigned int result = 0;
+		if (argument)
+			return -EINVAL;
+		spin_lock(&vma_fault_lock);
+		if (command <= DMA_AUDIT_VMA_ARM(2, 2)) {
+			dma_audit_fault_arm(&vma_fault_plan, (unsigned long)current,
+				(unsigned long)current->mm, (command - DMA_AUDIT_VMA_ARM(0, 1)) % 2 + 1);
+			/* Three VMA sites are separate from the two mapper fault sites. */
+			vma_fault_plan.site = (command - DMA_AUDIT_VMA_ARM(0, 1)) / 2;
+		} else if (vma_fault_plan.owner != (unsigned long)current ||
+			   vma_fault_plan.mm != (unsigned long)current->mm) {
+			spin_unlock(&vma_fault_lock);
+			return -EPERM;
+		} else if (command == DMA_AUDIT_VMA_FIRED) {
+			result = vma_fault_plan.fired;
+		} else {
+			vma_fault_plan = (struct dma_audit_fault_plan){0};
+		}
+		spin_unlock(&vma_fault_lock);
+		return result;
+	}
 	if (command >= DMA_AUDIT_EXPORT_FAIL(0, 1) &&
 	    command <= DMA_AUDIT_EXPORT_FAIL(1, 4))
 		fault = (command - DMA_AUDIT_EXPORT_FAIL(0, 1)) % 4 + 1;
