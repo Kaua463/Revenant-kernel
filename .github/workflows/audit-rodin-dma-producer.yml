@@ -124,6 +124,10 @@ jobs:
           python3 scripts/test-dmabuf-exporter-source.py
           python3 scripts/test-dmabuf-audit-fault-plan.py
           python3 scripts/test-dmabuf-audit-log-formats.py
+          # Fail on real Linux/AArch64 guest warnings before costly Kbuild.
+          aarch64-linux-gnu-gcc -std=c11 -O1 -Wall -Wextra -Werror -pthread -static \
+            tools/stock-recovery/runtime-audit/guest-workload.c -o "$RUNNER_TEMP/dma-guest-preflight"
+          python3 scripts/test-dmabuf-vm-runner.py
           DMA_FOLDED_ACK_SOURCE="$GITHUB_WORKSPACE/ws/common" \
             DMA_ACK_REFERENCE="$GITHUB_WORKSPACE/runtime-reference" \
             python3 scripts/test-dmabuf-folded-levels.py

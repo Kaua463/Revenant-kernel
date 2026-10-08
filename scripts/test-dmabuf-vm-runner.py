@@ -10,6 +10,45 @@ import unittest
 from unittest.mock import patch
 
 module = SourceFileLoader('dma_vm_runner', str(Path(__file__).with_name('run-dmabuf-vm-audit.py'))).load_module()
+
+def mock_extended():
+    lines = ['DMA_EXT_BEGIN']
+    identity = 100
+    for mode in (0, 1):
+        for stage in range(1, 5):
+            if stage == 4:
+                lines.extend([f'DMA_EXPORT_ALLOC id={identity} mode={mode} bytes=4194304',
+                              f'DMA_EXPORT_RELEASE id={identity} mode={mode}'])
+                identity += 1
+            lines.append(f'DMA_EXT_FAULT_PASS mode={mode} stage={stage} live=0 tables_restored=1')
+        for round in range(8):
+            lines.extend([f'DMA_EXPORT_ALLOC id={identity} mode={mode} bytes=4194304',
+                          *[f'DMA_EXPORT_MMAP id={identity} mode={mode} bytes=4194304 offset=0 huge=1 result=0'] * 2,
+                          f'DMA_EXT_PARENT_PASS mode={mode} round={round} child_holds=2 tables_restored=1',
+                          f'DMA_EXPORT_RELEASE id={identity} mode={mode}',
+                          f'DMA_EXT_LIFETIME_PASS mode={mode} round={round} children=2 explicit_unmap=1 exit_mmap=1 live=0'])
+            identity += 1
+    return '\n'.join(lines + ['DMA_EXT_END faults=8 lifetime=16 children=32'])
+
+
+class ExtendedProof(unittest.TestCase):
+    def test_complete_inventory(self):
+        module.check_extended_log(mock_extended())
+
+    def test_missing_duplicate_wrong_release_and_accounting_rejected(self):
+        good = mock_extended()
+        for before, after in [
+            ('DMA_EXT_FAULT_PASS mode=0 stage=2 live=0 tables_restored=1', ''),
+            ('DMA_EXT_PARENT_PASS mode=0 round=0 child_holds=2 tables_restored=1',
+             'DMA_EXT_PARENT_PASS mode=0 round=0 child_holds=1 tables_restored=1'),
+            ('DMA_EXPORT_RELEASE id=101 mode=0', 'DMA_EXPORT_RELEASE id=999 mode=0'),
+            ('DMA_EXPORT_RELEASE id=100 mode=0', 'DMA_EXPORT_RELEASE id=100 mode=0\nDMA_EXPORT_RELEASE id=100 mode=0'),
+            ('DMA_EXT_LIFETIME_PASS mode=1 round=7 children=2 explicit_unmap=1 exit_mmap=1 live=0', ''),
+        ]:
+            with self.subTest(before=before), self.assertRaises(ValueError):
+                module.check_extended_log(good.replace(before, after))
+
+
 def mock_pass():
     lines = []
     for identity, mode, device, inject in ((1, 0, 'pmd', 0), (2, 1, 'pte', 0),
@@ -52,7 +91,7 @@ def mock_pass():
                       f'DMA_EXPORT_LAST_UNMAP mode={mode}',
                       f'DMA_EXPORT_RELEASE id={identity} mode={mode}',
                       f'DMA_EXPORT_CASE_PASS mode={mode} live=0'))
-    return '\n'.join(lines + ['DMA_GUEST_PASS: basic tests', 'DMA_VM_RESULT_PASS: finished'])
+    return '\n'.join(lines + [mock_extended(), 'DMA_GUEST_PASS: basic tests', 'DMA_VM_RESULT_PASS: finished'])
 
 
 PASS = mock_pass()

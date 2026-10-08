@@ -24,6 +24,13 @@ def check_log(text):
     error = re.search(r'DMA_(?:GUEST_FAIL|VM_RESULT_FAIL|AUDIT_FAULT_FAIL|AUDIT_ACCOUNTING_FAIL)|BUG:|WARNING:|Oops:|Kernel panic|Call trace:',text)
     if error:
         raise ValueError('guest/kernel failure reported: '+error.group(0))
+    if text.count('DMA_EXT_BEGIN') != 1 or text.count('DMA_EXT_END faults=8 lifetime=16 children=32') != 1:
+        raise ValueError('extended failure/lifetime workload missing or duplicated')
+    start = text.index('DMA_EXT_BEGIN')
+    end = text.index('DMA_EXT_END faults=8 lifetime=16 children=32', start)
+    check_extended_log(text[start:end])
+    # Legacy checks retain their exact inventory, independently of extension.
+    text = text[:start] + text[end:]
     for marker in ('DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-pmd',
                    'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-pte',
                    'DMA_GUEST_CASE_PASS: /dev/recovered-dma-audit-fault-pmd',
@@ -128,6 +135,47 @@ def check_log(text):
                   if start < event.start() < end]
         if owners != [0]:
             raise ValueError('huge-helper event outside unique owned PMD lifetime')
+
+
+def check_extended_log(text):
+    allocated = list(re.finditer(r'DMA_EXPORT_ALLOC id=([1-9][0-9]*) mode=([01]) bytes=4194304\r?\n', text))
+    released = list(re.finditer(r'DMA_EXPORT_RELEASE id=([1-9][0-9]*) mode=([01])\r?\n', text))
+    mappings = list(re.finditer(r'DMA_EXPORT_MMAP id=([1-9][0-9]*) mode=([01]) bytes=4194304 offset=0 huge=1 result=0\r?\n', text))
+    if (len(allocated) != 18 or len(released) != 18 or len(mappings) != 32 or
+        text.count('DMA_EXPORT_ALLOC') != 18 or text.count('DMA_EXPORT_RELEASE') != 18 or
+        text.count('DMA_EXPORT_MMAP') != 32 or
+        text.count('DMA_EXT_FAULT_PASS') != 8 or text.count('DMA_EXT_PARENT_PASS') != 16 or
+        text.count('DMA_EXT_LIFETIME_PASS') != 16 or
+        len({m.group(1) for m in allocated}) != 18):
+        raise ValueError('extended inventory missing, malformed or duplicated')
+    for mode in (0, 1):
+        owned = [a for a in allocated if a.group(2) == str(mode)]
+        if len(owned) != 9:
+            raise ValueError('extended mode buffer inventory mismatch')
+        for stage in range(1, 5):
+            marker = f'DMA_EXT_FAULT_PASS mode={mode} stage={stage} live=0 tables_restored=1'
+            if text.count(marker) != 1:
+                raise ValueError('missing acquisition fault/unwind result')
+        for index, allocation in enumerate(owned):
+            returns = [r for r in released if r.group(1, 2) == allocation.group(1, 2)]
+            maps = [r for r in mappings if r.group(1, 2) == allocation.group(1, 2)]
+            if len(returns) != 1 or allocation.start() >= returns[0].start():
+                raise ValueError('extended backing release not exactly once after allocation')
+            if index == 0:
+                marker = f'DMA_EXT_FAULT_PASS mode={mode} stage=4 live=0 tables_restored=1'
+                if maps or returns[0].start() >= text.index(marker):
+                    raise ValueError('failed FD installation ownership not unwound')
+                continue
+            round = index - 1
+            parent = f'DMA_EXT_PARENT_PASS mode={mode} round={round} child_holds=2 tables_restored=1'
+            done = f'DMA_EXT_LIFETIME_PASS mode={mode} round={round} children=2 explicit_unmap=1 exit_mmap=1 live=0'
+            if text.count(parent) != 1 or text.count(done) != 1 or len(maps) != 2:
+                raise ValueError('extended sibling/parent lifetime result missing')
+            if not (allocation.start() < maps[0].start() < maps[1].start() <
+                    text.index(parent) < returns[0].start() < text.index(done)):
+                raise ValueError('release before children final teardown or invalid parent accounting')
+    if {m.group(1, 2) for m in mappings + released} - {a.group(1, 2) for a in allocated}:
+        raise ValueError('unowned extended mapping/release')
 
 
 def check_export_log(text):
@@ -238,7 +286,9 @@ def run(args):
                      'twelve pre-fork move/full-and-partial-protect/discard guards with concurrent alias reads before fork data checks',
                      'page-table accounting returns to baseline after selected partial ENOMEM',
                      'real DMA-BUF core to exporter mmap, 4K/64K/2M/4M alignment including nonaligned hints',
-                     'two DMA-BUF-owned buffers survive fd close/fork/move until final unmap'] if reason is None else [],
+                     'two DMA-BUF-owned buffers survive fd close/fork/move until final unmap',
+                     'eight exporter acquisition failures unwind through actual kernel cleanup',
+                     'sixteen dual-child lifetimes with explicit unmap and real exit_mmap; parent cold-PGD accounting restored; eighteen extended buffers released once'] if reason is None else [],
         'pending': ['all allocator failure sites and accounting', 'stock GPU producer activation', 'hardware/complete lifetime'],
     }
     (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')

@@ -15,8 +15,8 @@ fault_sites = SourceFileLoader('runtime_dma_fault_sites', str(ROOT / 'scripts/pr
 runtime_trace = SourceFileLoader('runtime_dma_trace', str(ROOT / 'scripts/prepare-dmabuf-runtime-trace.py')).load_module()
 PINS = {
     'recovered-dma-audit.c': '66ab45926e617544e8407a347a00d32ed8becbd7b05a4c5f1729c886ec1ba1fa',
-    'recovered-dma-export-audit.c': 'ec4cf6663865992215d3d130a86cea978c02ee09514e8f081ca7bb0672de9b13',
-    'audit-export-contract.h': '442bce26daf008e6f00564ce89dd9a8c1410e6326aa5cb23b45946a1cce8a13a',
+    'recovered-dma-export-audit.c': '310e5fb8df46ff38992bcdd947064bb97c682b17b9663957c36d0795b976f545',
+    'audit-export-contract.h': '9cf0064f23135b77d15e836dcaddb0cdfc707bf1901b78a2564c91af0f003041',
     'audit-fault-plan.h': 'd048158044314fd7ae69a4250cf7ea9e13299986deea3709b1baef35cd5b99f5',
     'audit-map-contract.h': '3bcb3044740336508a49ea37b4af205a52c0510cf9bc0ff3cd6f751709d0388c',
     'Kconfig': '4771cb7d047b3723f804d36d1ab234c5c67a0f0e85b76cc161319ddf97367c17',

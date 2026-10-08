@@ -10,4 +10,7 @@
 #define DMA_AUDIT_EXPORT_PMD _IO('D', 0x40)
 #define DMA_AUDIT_EXPORT_PTE _IO('D', 0x41)
 #define DMA_AUDIT_EXPORT_LIVE _IO('D', 0x42)
+/* Disposable per-call injection: 4 ownership acquisition edges per mode. */
+#define DMA_AUDIT_EXPORT_TABLE_BYTES _IO('D', 0x44)
+#define DMA_AUDIT_EXPORT_FAIL(mode, stage) _IO('D', 0x50 + (mode) * 4 + (stage))
 #endif

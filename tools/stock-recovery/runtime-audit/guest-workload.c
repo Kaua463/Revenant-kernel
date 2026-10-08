@@ -442,6 +442,100 @@ static void exercise_export(unsigned int mode)
 	printf("DMA_EXPORT_CASE_PASS mode=%u live=0\n", mode);
 }
 
+static void wait_export_empty(int factory)
+{
+	for (unsigned int i = 0; i < 1000; i++) {
+		int live = ioctl(factory, DMA_AUDIT_EXPORT_LIVE, 0);
+		if (live < 0 || live > 1)
+			fail("extended invalid live count");
+		if (!live)
+			return;
+		usleep(1000);
+	}
+	fail("extended final release timeout");
+}
+
+static void exercise_extended(void)
+{
+	int factory = open("/dev/recovered-dma-export-audit", O_RDWR | O_CLOEXEC);
+	if (factory < 0 || ioctl(factory, DMA_AUDIT_EXPORT_LIVE, 0))
+		fail("extended baseline");
+	puts("DMA_EXT_BEGIN");
+	for (unsigned int mode = 0; mode < 2; mode++) {
+		for (unsigned int stage = 1; stage <= 4; stage++) {
+			long before = ioctl(factory, DMA_AUDIT_EXPORT_TABLE_BYTES, 0);
+			errno = 0;
+			if (before < 0 || ioctl(factory, DMA_AUDIT_EXPORT_FAIL(mode, stage), 0) != -1 ||
+			    errno != (stage == 4 ? EMFILE : ENOMEM))
+				fail("export acquisition failure not exercised");
+			wait_export_empty(factory);
+			if (ioctl(factory, DMA_AUDIT_EXPORT_TABLE_BYTES, 0) != before)
+				fail("export failure leaked page tables");
+			printf("DMA_EXT_FAULT_PASS mode=%u stage=%u live=0 tables_restored=1\n", mode, stage);
+		}
+		for (unsigned int round = 0; round < 8; round++) {
+			int fd = ioctl(factory, mode ? DMA_AUDIT_EXPORT_PTE : DMA_AUDIT_EXPORT_PMD, 0);
+			int pipes[2][2], ready[2], status;
+			pid_t children[2];
+			void *maps[2];
+			long before = ioctl(factory, DMA_AUDIT_EXPORT_TABLE_BYTES, 0);
+			if (fd < 0 || before < 0)
+				fail("extended buffer create");
+			for (unsigned int i = 0; i < 2; i++) {
+				uintptr_t address = UINT64_C(0x100000000) +
+					((uintptr_t)(mode * 16 + round * 2 + i) << 30);
+				maps[i] = mmap((void *)address, BYTES, PROT_READ | PROT_WRITE,
+					MAP_SHARED | MAP_FIXED_NOREPLACE, fd, 0);
+				if (maps[i] != (void *)address || pipe(pipes[i]))
+					fail("extended cold-PGD mapping or pipe");
+			}
+			audit_fill(maps[0], BYTES, SEED);
+			verify(maps[1], 0, BYTES);
+			for (unsigned int i = 0; i < 2; i++) {
+				children[i] = fork();
+				if (children[i] < 0)
+					fail("extended fork");
+				if (!children[i]) {
+					char token;
+					if (read(pipes[i][0], &token, 1) != 1)
+						_exit(31);
+					verify(maps[1], 0, BYTES);
+					if (close(fd) || munmap((char *)maps[0] + BLOCK, 4096))
+						_exit(32);
+					if (!i && (munmap(maps[0], BYTES) || munmap(maps[1], BYTES)))
+						_exit(33);
+					/* Sibling 1 leaves both VMAs to real exit_mmap. */
+					_exit(0);
+				}
+				ready[i] = pipes[i][1];
+			}
+			if (close(fd) || munmap(maps[0], BYTES) || munmap(maps[1], BYTES) ||
+			    ioctl(factory, DMA_AUDIT_EXPORT_LIVE, 0) != 1 ||
+			    ioctl(factory, DMA_AUDIT_EXPORT_TABLE_BYTES, 0) != before)
+				fail("parent cleanup lost child backing or parent tables");
+			printf("DMA_EXT_PARENT_PASS mode=%u round=%u child_holds=2 tables_restored=1\n", mode, round);
+			/* Both children are released together; final teardown can race. */
+			for (unsigned int i = 0; i < 2; i++)
+				if (write(ready[i], "x", 1) != 1)
+					fail("extended child release");
+			for (unsigned int i = 0; i < 2; i++) {
+				if (waitpid(children[i], &status, 0) != children[i] ||
+				    !WIFEXITED(status) || WEXITSTATUS(status))
+					fail("extended child teardown");
+				close(pipes[i][0]);
+				close(pipes[i][1]);
+			}
+			wait_export_empty(factory);
+			if (ioctl(factory, DMA_AUDIT_EXPORT_TABLE_BYTES, 0) != before)
+				fail("extended tables changed after child exits");
+			printf("DMA_EXT_LIFETIME_PASS mode=%u round=%u children=2 explicit_unmap=1 exit_mmap=1 live=0\n", mode, round);
+		}
+	}
+	if (close(factory))
+		fail("extended factory close");
+	puts("DMA_EXT_END faults=8 lifetime=16 children=32");
+}
+
 int main(int argc, char **argv)
 {
 	struct utsname name;
@@ -472,6 +566,7 @@ int main(int argc, char **argv)
 	exercise("/dev/recovered-dma-audit-table-cross-pte", 1);
 	exercise_export(0);
 	exercise_export(1);
+	exercise_extended();
 	puts("DMA_GUEST_PASS: basic mmap/fork/move/split/lifetime/SMP workload only");
 	return 0;
 }

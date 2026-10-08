@@ -12,6 +12,7 @@
 #include <linux/module.h>
 #include <linux/pgtable.h>
 #include <linux/scatterlist.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/xiaomi_dmabuf_huge.h>
 #include "audit-map-contract.h"
@@ -172,27 +173,41 @@ static long dma_export_audit_ioctl(struct file *file, unsigned int command, unsi
 	DEFINE_DMA_BUF_EXPORT_INFO(info);
 	struct export_buffer *buffer;
 	struct dma_buf *dmabuf;
+	unsigned int fault = 0, mode;
 	int fd;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 	if (file->private_data != &dma_export_audit_device)
 		return -ENODEV;
-	if (argument || (command != DMA_AUDIT_EXPORT_PMD &&
-			 command != DMA_AUDIT_EXPORT_PTE && command != DMA_AUDIT_EXPORT_LIVE))
+	if (command >= DMA_AUDIT_EXPORT_FAIL(0, 1) &&
+	    command <= DMA_AUDIT_EXPORT_FAIL(1, 4))
+		fault = (command - DMA_AUDIT_EXPORT_FAIL(0, 1)) % 4 + 1;
+	if (argument || (!fault && command != DMA_AUDIT_EXPORT_PMD &&
+			 command != DMA_AUDIT_EXPORT_PTE && command != DMA_AUDIT_EXPORT_LIVE &&
+			 command != DMA_AUDIT_EXPORT_TABLE_BYTES))
 		return -EINVAL;
 	if (command == DMA_AUDIT_EXPORT_LIVE)
 		return atomic_read(&export_live);
+	if (command == DMA_AUDIT_EXPORT_TABLE_BYTES) {
+		unsigned long bytes;
+		mmap_read_lock(current->mm);
+		bytes = mm_pgtables_bytes(current->mm);
+		mmap_read_unlock(current->mm);
+		return bytes;
+	}
+	mode = fault ? (command - DMA_AUDIT_EXPORT_FAIL(0, 1)) / 4 :
+		command == DMA_AUDIT_EXPORT_PTE;
 	if (atomic_inc_return(&export_live) > EXPORT_MAX_LIVE) {
 		atomic_dec(&export_live);
 		return -ENOSPC;
 	}
-	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
+	buffer = fault == 1 ? NULL : kzalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer) {
 		atomic_dec(&export_live);
 		return -ENOMEM;
 	}
-	buffer->pages = alloc_pages(GFP_KERNEL | __GFP_ZERO | __GFP_COMP |
+	buffer->pages = fault == 2 ? NULL : alloc_pages(GFP_KERNEL | __GFP_ZERO | __GFP_COMP |
 				    __GFP_NOWARN, EXPORT_ORDER);
 	if (!buffer->pages) {
 		kfree(buffer);
@@ -200,13 +215,13 @@ static long dma_export_audit_ioctl(struct file *file, unsigned int command, unsi
 		return -ENOMEM;
 	}
 	buffer->id = (unsigned long long)atomic64_inc_return(&export_next_id);
-	buffer->mode = command == DMA_AUDIT_EXPORT_PTE;
+	buffer->mode = mode;
 	info.exp_name = "recovered-dma-vm";
 	info.ops = &dma_export_audit_ops;
 	info.size = EXPORT_BYTES;
 	info.flags = O_RDWR;
 	info.priv = buffer;
-	dmabuf = dma_buf_export(&info);
+	dmabuf = fault == 3 ? ERR_PTR(-ENOMEM) : dma_buf_export(&info);
 	if (IS_ERR(dmabuf)) {
 		fd = PTR_ERR(dmabuf);
 		__free_pages(buffer->pages, EXPORT_ORDER);
@@ -216,7 +231,7 @@ static long dma_export_audit_ioctl(struct file *file, unsigned int command, unsi
 	}
 	pr_info("DMA_EXPORT_ALLOC id=%llu mode=%u bytes=%lu\n",
 		buffer->id, buffer->mode, (unsigned long)EXPORT_BYTES);
-	fd = dma_buf_fd(dmabuf, O_CLOEXEC);
+	fd = fault == 4 ? -EMFILE : dma_buf_fd(dmabuf, O_CLOEXEC);
 	if (fd < 0)
 		dma_buf_put(dmabuf);
 	return fd;

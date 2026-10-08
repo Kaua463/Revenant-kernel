@@ -13,8 +13,14 @@ def validate(source):
         'defined(MODULE)', '!defined(CONFIG_XIAOMI_DMABUF_RUNTIME_AUDIT)',
         '!defined(CONFIG_DMA_SHARED_BUFFER)', 'CONFIG_PGTABLE_LEVELS != 3',
         'EXPORT_MAX_LIVE 8', 'if (atomic_inc_return(&export_live) > EXPORT_MAX_LIVE)',
-        'if (argument || (command != DMA_AUDIT_EXPORT_PMD',
-        'command != DMA_AUDIT_EXPORT_PTE && command != DMA_AUDIT_EXPORT_LIVE)',
+        'if (argument || (!fault && command != DMA_AUDIT_EXPORT_PMD',
+        'command != DMA_AUDIT_EXPORT_TABLE_BYTES))',
+        'command >= DMA_AUDIT_EXPORT_FAIL(0, 1)',
+        'command <= DMA_AUDIT_EXPORT_FAIL(1, 4)',
+        'fault == 1 ? NULL : kzalloc', 'fault == 2 ? NULL : alloc_pages',
+        'fault == 3 ? ERR_PTR(-ENOMEM) : dma_buf_export',
+        'fault == 4 ? -EMFILE : dma_buf_fd',
+        'mmap_read_lock(current->mm)', 'mmap_read_unlock(current->mm)',
         'return atomic_read(&export_live);', '__GFP_ZERO | __GFP_COMP',
         'length > EXPORT_BYTES - offset', 'vma->vm_pgoff > (ULONG_MAX >> PAGE_SHIFT)',
         'vm_flags_clear(vma, VM_MAYEXEC)', '!export_empty_destination(vma)',
@@ -76,7 +82,7 @@ class Exporter(unittest.TestCase):
         for token in ('length > EXPORT_BYTES - offset', 'info.size = EXPORT_BYTES;',
                       'vm_flags_clear(vma, VM_MAYEXEC)', '!export_empty_destination(vma)',
                       'if (!capable(CAP_SYS_ADMIN))', 'dma_buf_fd(dmabuf, O_CLOEXEC)',
-                      'if (argument || (command != DMA_AUDIT_EXPORT_PMD'):
+                      'if (argument || (!fault && command != DMA_AUDIT_EXPORT_PMD'):
             with self.subTest(token=token), self.assertRaises(ValueError):
                 validate(self.source.replace(token,'REMOVED'))
         for token in ('copy_from_user(x)', 'ioremap(x)', '.read = dump', 'EXPORT_SYMBOL(x)'):
