@@ -4,7 +4,6 @@ import argparse
 from importlib.machinery import SourceFileLoader
 import json
 from pathlib import Path
-import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -66,16 +65,20 @@ class RootRuntime(unittest.TestCase):
             m.validate_composition(self.source, self.report)
 
     def test_instrumentation_preserves_root_paths_and_rejects_repeat(self):
-        # Canonical huge_memory source, not a substitute implementation.
-        reference = m.runtime.ROOT.parents[1] / 'outputs/stock-dmabuf-overlay-20261006-v9/candidate/mm/huge_memory.c'
+        # Self-contained orchestration fixture. Actual canonical transform and
+        # exact root manifests are mandatory in the remote integration stage.
         (self.source / 'mm').mkdir()
-        shutil.copyfile(reference, self.source / 'mm/huge_memory.c')
+        (self.source / 'mm/huge_memory.c').write_bytes(b'fixture huge memory')
         for name in ['mm/Kconfig', 'mm/Makefile']:
             (self.source / name).write_text('root fixture preserved\n')
         composition = self.folder / 'composition.json'
         composition.write_text(json.dumps(self.report))
         args = argparse.Namespace(source=self.source, composition=composition, output=self.folder / 'result.json')
-        m.run(args)
+        with patch.object(m.runtime.fault_sites, 'transform', return_value=b'fault fixture') as faults, \
+             patch.object(m.runtime.runtime_trace, 'transform', return_value=b'trace fixture') as traces:
+            m.run(args)
+            faults.assert_called_once_with(b'fixture huge memory')
+            traces.assert_called_once_with(b'fault fixture')
         self.assertEqual((self.source / 'path0').read_text(), 'fixture0')
         self.assertTrue((self.source / 'mm/Kconfig').read_text().startswith('root fixture preserved\n'))
         self.assertTrue((self.source / 'mm/recovered-dma-audit/recovered-dma-export-audit.c').is_file())
