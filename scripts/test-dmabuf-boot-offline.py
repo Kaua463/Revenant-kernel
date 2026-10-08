@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+import gzip
 import struct
 import unittest
 
@@ -8,6 +9,25 @@ m = SourceFileLoader('offline_boot', str(Path(__file__).with_name('audit-dmabuf-
 
 
 class Geometry(unittest.TestCase):
+    def test_config_only_dma_and_no_unrequested_kfence_changes(self):
+        installed = b'CONFIG_KFENCE=y\nCONFIG_KFENCE_SAMPLE_INTERVAL=500\n'
+        candidate = installed + b'CONFIG_XIAOMI_DMABUF_HUGETLB=y\n'
+        self.assertEqual(m.config_difference(installed, candidate),
+                         {'CONFIG_XIAOMI_DMABUF_HUGETLB': [None, 'y']})
+        for changed in (installed, candidate.replace(b'INTERVAL=500', b'INTERVAL=100'),
+                        candidate.replace(b'KFENCE=y', b'KFENCE=n')):
+            with self.assertRaises(ValueError):
+                m.config_difference(installed, changed)
+
+    def test_embedded_config_unique_intact_and_ordered(self):
+        config = b'CONFIG_FIXTURE=y\n'
+        blob = b'prefixIKCFG_ST' + gzip.compress(config) + b'IKCFG_EDsuffix'
+        self.assertEqual(m.embedded_config(blob), config)
+        for changed in (blob + b'IKCFG_ST', blob + b'IKCFG_ED',
+                        b'IKCFG_EDIKCFG_ST', b'no configuration'):
+            with self.assertRaises(ValueError):
+                m.embedded_config(changed)
+
     def boot(self):
         data = bytearray(m.PARTITION)
         data[:8] = b'ANDROID!'

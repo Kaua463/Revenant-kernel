@@ -1,5 +1,38 @@
 # Disposable DMA runtime audit — bounded VM evidence, not shipping approval
 
+## Current checkpoint (2026-10-07 local)
+
+Expanded non-root VM run **37710420170** passes the ten misc/two exporter
+workloads plus eight exporter-acquisition failures and sixteen dual-child
+lifetime rounds (32 children). Explicit unmap and actual `exit_mmap` both run;
+parent cold-PGD accounting returns to baseline; eighteen extended buffers are
+released once. Downloaded serial/config were independently revalidated.
+
+The exact KernelSU/SUSFS composition is now instrumented separately through
+`prepare-dmabuf-root-runtime.py`, after its 31-path manifest and copied-source
+checks, before ROM ABI controls. Run **37713012839**, commit
+`6878534d115bac1de95e9f38aa03d4d87d7ca14a`, passed the actual ARM64 VM with the
+same extended workload. Downloaded serial/config/composition/providers were
+rechecked with the strict parser; root startup appears in the serial.
+This is root+DMA coexistence evidence, not Android manager/root-grant validation.
+Its workflow uploads logs/config/reports only, not the VM Image.
+
+`audit-dmabuf-offline-suite.py` repeats 60 cached local groups sequentially,
+including 18 ARM64 stock differential groups, overlay/root composition, ABI and KFENCE checks. All passed
+in the recorded offline report. The new read-only boot audit distinguishes the
+ARM64 required RAM span from file bytes and preserves backup identity. The
+existing custom boot backup's AVB content descriptor fails verification, despite
+its vbmeta signature verifying with the embedded key. Neither that key nor
+container-size/round-trip success is device trust or flash approval.
+
+Remaining: exhaustive generic allocator/fork/VMA failures, all MMU/TLB/RCU/SMP
+lifetimes, stock GPU producer activation, physical DMA attachment behavior and
+phone validation. These results do not lift SPEC V39 or authorize installation.
+
+The material below preserves **older checkpoints and design rationale**;
+historical “pending” statements refer to their explicitly named runs, not the
+current bounded coverage above.
+
 `audit-map-contract.h` is a **new test-producer preflight**, not Xiaomi code,
 not a shipping hook and not wired into any kernel build. It deliberately limits
 the future test producer to shared, 2 MiB-aligned mappings within its owned

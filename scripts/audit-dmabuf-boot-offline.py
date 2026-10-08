@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read-only boot geometry and backup audit. Never packs or approves a flash."""
 import argparse
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -21,6 +22,28 @@ def digest(data):
 
 def align(value):
     return (value + PAGE - 1) // PAGE * PAGE
+
+
+def embedded_config(image):
+    if image.count(b'IKCFG_ST') != 1 or image.count(b'IKCFG_ED') != 1:
+        raise ValueError('unique embedded kernel config required')
+    start = image.index(b'IKCFG_ST') + 8
+    end = image.index(b'IKCFG_ED')
+    if end <= start:
+        raise ValueError('embedded config extent invalid')
+    return gzip.decompress(image[start:end])
+
+
+def config_difference(installed, candidate):
+    def parse(data):
+        return dict(line.split('=', 1) for line in data.decode().splitlines()
+                    if line.startswith('CONFIG_') and '=' in line)
+    a, b = parse(installed), parse(candidate)
+    differences = {key: [a.get(key), b.get(key)] for key in sorted(a.keys() | b.keys())
+                   if a.get(key) != b.get(key)}
+    if differences != {'CONFIG_XIAOMI_DMABUF_HUGETLB': [None, 'y']}:
+        raise ValueError('candidate config changes more than requested DMA flag')
+    return differences
 
 
 def boot_layout(data):
@@ -78,6 +101,14 @@ def run(args):
         inputs[label] = data
     layout = boot_layout(inputs['boot_backup'])
     candidate = arm64_layout(inputs['candidate'])
+    compressed = inputs['boot_backup'][PAGE:PAGE + layout['kernel_bytes']]
+    decoded = subprocess.run(['lz4', '--decompress', '--stdout'], input=compressed,
+                             capture_output=True, timeout=30, check=True).stdout
+    installed_config = embedded_config(decoded)
+    candidate_config = embedded_config(inputs['candidate'])
+    if candidate_config != args.config.read_bytes():
+        raise ValueError('candidate embedded config differs from exported evidence')
+    differences = config_difference(installed_config, candidate_config)
     if len(inputs['recovery_backup']) != PARTITION or inputs['recovery_backup'][:8] != b'VNDRBOOT':
         raise ValueError('vendor recovery geometry mismatch')
     with tempfile.TemporaryDirectory() as folder:
@@ -93,6 +124,10 @@ def run(args):
     result = dict(status='OFFLINE_LAYOUT_AND_BACKUP_IDENTITY_ONLY_NOT_FLASH_APPROVAL',
                   inputs={k: dict(sha256=digest(v), bytes=len(v)) for k, v in inputs.items()},
                   boot_layout=layout, candidate_layout=candidate,
+                  installed_image_sha256=digest(decoded),
+                  installed_config_sha256=digest(installed_config),
+                  candidate_config_sha256=digest(candidate_config),
+                  config_differences=differences,
                   avbtool_sha256=digest(args.avbtool.read_bytes()),
                   avb_info=info.stdout, avb_verify_exit=verify.returncode,
                   avb_verify_output=verify.stdout + verify.stderr,
@@ -108,6 +143,6 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('boot', 'recovery', 'image', 'avbtool', 'output'):
+    for name in ('boot', 'recovery', 'image', 'config', 'avbtool', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     run(parser.parse_args())

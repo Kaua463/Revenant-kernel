@@ -39,6 +39,22 @@ def commands(outputs, python):
         yield name, [str(python), str(ROOT / f'scripts/test-dmabuf-{name}.py'),
                      '--image', str(image), '--symbols', str(symbols),
                      *map(str, extras.get(name, []))]
+    reference = outputs / 'stock-ack-dmabuf-overlay-reference-20261005'
+    core = outputs / 'stock-ack-dma-core-reference-20261006/drivers/dma-buf/dma-buf.c'
+    overlay = ROOT / 'tools/stock-recovery/overlays/dma-6.6.77'
+    susfs = ROOT.parent / 'susfs-audit/repo'
+    generated = {
+        'test-prepare-dmabuf-reimplementation': ['--source', reference, '--image', image, '--symbols', symbols],
+        'test-dmabuf-overlay-validator': ['--source', reference, '--overlay', overlay],
+        'test-dmabuf-combined-overlay': ['--source', reference, '--core', core, '--image', image, '--symbols', symbols],
+        'test-dmabuf-susfs-overlay': ['--ack-reference', reference, '--overlay', overlay, '--susfs-source', susfs],
+        'test-dmabuf-susfs-composition': ['--source', reference, '--overlay', overlay, '--susfs-source', susfs],
+        'test-dmabuf-root-snapshot': ['--source', outputs / 'stock-ack-dma-root-snapshot-reference-20261006',
+                                     '--susfs-source', susfs, '--overlay', overlay, '--core', core],
+        'test-dmabuf-stock-address-selector': ['--image', image, '--symbols', symbols],
+    }
+    for name, arguments in generated.items():
+        yield name, [str(python), str(ROOT / f'scripts/{name}.py'), *map(str, arguments)]
     candidate = outputs / 'dma-hardware-candidate-37703159922'
     yield '610-module-abi', [str(python), str(ROOT / 'scripts/rom-module-reference.py'), 'check',
                              '--symvers', str(candidate / 'Module.symvers'), '--image', str(candidate / 'Image'),
